@@ -1830,3 +1830,29 @@ func SkipIfNotAMD64() {
 		Skip("test only valid on amd64")
 	}
 }
+
+const policyContent = `{
+    "default": [
+        {
+            "type": "insecureAcceptAnything"
+        }
+    ],
+    "transports":
+        {
+            "docker-daemon":
+                {
+                    "": [{"type":"insecureAcceptAnything"}]
+                }
+        }
+}
+`
+
+// createPolicyJSONFile creates a policy.json file in podmanTest.TempDir with an
+// insecureAcceptAnything policy and returns the path to that file.
+func createPolicyJSONFile() string {
+	GinkgoHelper()
+	path := filepath.Join(podmanTest.TempDir, "policy.json")
+	err := os.WriteFile(path, []byte(policyContent), 0o600)
+	Expect(err).ToNot(HaveOccurred())
+	return path
+}

@@ -29,7 +29,7 @@ var _ = Describe("Podman save", func() {
 		SkipIfRemote("--signature-policy N/A for remote")
 		outfile := filepath.Join(podmanTest.TempDir, "alpine.tar")
 
-		save := podmanTest.Podman([]string{"save", "-q", "--signature-policy", "/etc/containers/policy.json", "-o", outfile, ALPINE})
+		save := podmanTest.Podman([]string{"save", "-q", "--signature-policy", createPolicyJSONFile(), "-o", outfile, ALPINE})
 		save.WaitWithDefaultTimeout()
 		Expect(save).Should(ExitCleanly())
 	})

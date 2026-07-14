@@ -146,7 +146,7 @@ var _ = Describe("Podman run", func() {
 		}
 		Expect(session).To(ExitWithError(125, "open /no/such/file: no such file or directory"))
 
-		session = podmanTest.Podman([]string{"run", "--pull=always", "--signature-policy", "/etc/containers/policy.json", ALPINE})
+		session = podmanTest.Podman([]string{"run", "--pull=always", "--signature-policy", createPolicyJSONFile(), ALPINE})
 		session.WaitWithDefaultTimeout()
 		Expect(session).Should(Exit(0))
 		Expect(session.ErrorToString()).To(ContainSubstring("Getting image source signatures"))

@@ -354,7 +354,7 @@ var _ = Describe("Podman create", func() {
 			Expect(session).To(ExitWithError(125, "open /no/such/file: no such file or directory"))
 		}
 
-		session = podmanTest.Podman([]string{"create", "-q", "--pull=always", "--signature-policy", "/etc/containers/policy.json", ALPINE})
+		session = podmanTest.Podman([]string{"create", "-q", "--pull=always", "--signature-policy", createPolicyJSONFile(), ALPINE})
 		session.WaitWithDefaultTimeout()
 		Expect(session).Should(ExitCleanly())
 	})
