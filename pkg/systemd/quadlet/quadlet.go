@@ -1152,18 +1152,20 @@ func ConvertContainer(container *parser.UnitFile, unitsInfoMap map[string]*UnitI
 	}
 	hasSAP := len(sapPorts) > 0
 
-	hasHostNetwork := false
-	for _, netw := range container.LookupAll(ContainerGroup, KeyNetwork) {
-		if netw == "host" {
-			hasHostNetwork = true
-		} else if netw == "none" || strings.HasPrefix(netw, "container:") || strings.HasSuffix(netw, ".container") {
-			return nil, warnings, fmt.Errorf("SocketActivationPort requires a network whose published port is reachable on the loopback where the proxy runs; Network=%s unsupported", netw), nil
+	if hasSAP {
+		hasHostNetwork := false
+		for _, netw := range container.LookupAll(ContainerGroup, KeyNetwork) {
+			if netw == "host" {
+				hasHostNetwork = true
+			} else if netw == "none" || strings.HasPrefix(netw, "container:") || strings.HasSuffix(netw, ".container") {
+				return nil, warnings, fmt.Errorf("SocketActivationPort requires a network whose published port is reachable on the loopback where the proxy runs; Network=%s unsupported", netw), nil
+			}
 		}
-	}
-	if hasSAP && hasHostNetwork {
-		warnings = errors.Join(warnings, fmt.Errorf("SocketActivationPort ignored: Network=host does not support socket activation"))
-		hasSAP = false
-		sapPorts = nil
+		if hasHostNetwork {
+			warnings = errors.Join(warnings, fmt.Errorf("SocketActivationPort ignored: Network=host does not support socket activation"))
+			hasSAP = false
+			sapPorts = nil
+		}
 	}
 
 	if hasSAP {
@@ -1995,18 +1997,20 @@ func ConvertPod(podUnit *parser.UnitFile, unitsInfoMap map[string]*UnitInfo, isU
 	}
 	podHasSAP := len(podSapPorts) > 0
 
-	podHasHost := false
-	for _, netw := range podUnit.LookupAll(PodGroup, KeyNetwork) {
-		if netw == "host" {
-			podHasHost = true
-		} else if netw == "none" || strings.HasPrefix(netw, "container:") || strings.HasSuffix(netw, ".container") {
-			return nil, warnings, fmt.Errorf("SocketActivationPort requires a network whose published port is reachable on the loopback where the proxy runs; Network=%s unsupported", netw), nil
+	if podHasSAP {
+		podHasHost := false
+		for _, netw := range podUnit.LookupAll(PodGroup, KeyNetwork) {
+			if netw == "host" {
+				podHasHost = true
+			} else if netw == "none" || strings.HasPrefix(netw, "container:") || strings.HasSuffix(netw, ".container") {
+				return nil, warnings, fmt.Errorf("SocketActivationPort requires a network whose published port is reachable on the loopback where the proxy runs; Network=%s unsupported", netw), nil
+			}
 		}
-	}
-	if podHasSAP && podHasHost {
-		warnings = errors.Join(warnings, fmt.Errorf("SocketActivationPort ignored: Network=host does not support socket activation"))
-		podHasSAP = false
-		podSapPorts = nil
+		if podHasHost {
+			warnings = errors.Join(warnings, fmt.Errorf("SocketActivationPort ignored: Network=host does not support socket activation"))
+			podHasSAP = false
+			podSapPorts = nil
+		}
 	}
 
 	if podHasSAP {
