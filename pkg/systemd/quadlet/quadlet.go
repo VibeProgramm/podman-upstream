@@ -628,6 +628,14 @@ func resolveSocketActivationPorts(unitFile *parser.UnitFile, groupName string) (
 			usedPorts[int(p.HostPort)] = true
 		}
 		usedPorts[int(p.ContainerPort)] = true
+		if p.Range > 1 {
+			for r := uint16(1); r < p.Range; r++ {
+				if p.HostPort != 0 {
+					usedPorts[int(p.HostPort)+int(r)] = true
+				}
+				usedPorts[int(p.ContainerPort)+int(r)] = true
+			}
+		}
 	}
 
 	for _, ep := range unitFile.LookupAll(groupName, KeyExposeHostPort) {
@@ -664,7 +672,18 @@ func resolveSocketActivationPorts(unitFile *parser.UnitFile, groupName string) (
 	var ports []SocketActivationPortSpec
 	prevInternal := 1024
 	for _, rawSpec := range sapEntries {
-		if strings.Contains(rawSpec, "%i") || strings.Contains(rawSpec, "%p") || strings.Contains(rawSpec, "%N") || strings.Contains(rawSpec, "%j") {
+		rawSpec = strings.TrimSpace(rawSpec)
+		if len(rawSpec) == 0 {
+			continue
+		}
+		if strings.Contains(rawSpec, "%i") || strings.Contains(rawSpec, "%I") ||
+			strings.Contains(rawSpec, "%n") || strings.Contains(rawSpec, "%N") ||
+			strings.Contains(rawSpec, "%p") || strings.Contains(rawSpec, "%P") ||
+			strings.Contains(rawSpec, "%j") || strings.Contains(rawSpec, "%J") ||
+			strings.Contains(rawSpec, "%h") || strings.Contains(rawSpec, "%H") ||
+			strings.Contains(rawSpec, "%f") || strings.Contains(rawSpec, "%t") ||
+			strings.Contains(rawSpec, "%s") || strings.Contains(rawSpec, "%m") ||
+			strings.Contains(rawSpec, "%b") || strings.Contains(rawSpec, "%v") {
 			return nil, nil, warnings, fmt.Errorf("SocketActivationPort does not support systemd specifiers in port numbers")
 		}
 

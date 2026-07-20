@@ -1,5 +1,5 @@
 ####> This option file is used in:
-####>   podman-container.unit.5.md.in, podman-pod.unit.5.md.in
+####>   podman podman-container.unit.5.md.in, podman-pod.unit.5.md.in
 ####> If file is edited, make sure the changes
 ####> are applicable to all of those.
 ### `SocketActivationPort=[[hostIP:]hostPort:]containerPort`

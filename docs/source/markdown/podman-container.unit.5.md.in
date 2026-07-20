@@ -343,6 +343,14 @@ Set the label process type for the container processes.
 
 @@option quadlet:socket-activation-port
 
+### `SocketActivationPortOptions=option1 option2 ...`
+
+Space-separated list of extra arguments passed to `systemd-socket-proxyd`.
+Supported options: `--timeout=<seconds>`, `--buffer-size=<bytes>`, `--verbose`.
+Unknown options are rejected at generation time.
+
+Example: `SocketActivationPortOptions=--timeout=30s --verbose`
+
 ### `StartWithPod=bool`
 
 Start the container after the associated pod is created. Defaults to **true**.

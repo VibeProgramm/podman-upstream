@@ -111,6 +111,11 @@ Note that the name should not include the `.service` file extension.
 
 @@option quadlet:socket-activation-port
 
+### `SocketActivationPortOptions=option1 option2 ...`
+
+Space-separated list of extra arguments passed to `systemd-socket-proxyd`.
+Supported options: `--timeout=<seconds>`, `--buffer-size=<bytes>`, `--verbose`.
+
 @@option quadlet:subgidname
 
 @@option quadlet:subuidname
