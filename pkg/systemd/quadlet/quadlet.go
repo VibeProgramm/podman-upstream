@@ -709,8 +709,15 @@ func resolveSocketActivationPorts(unitFile *parser.UnitFile, groupName string) (
 		pm.Protocol = "tcp"
 
 		for _, p := range ppPorts {
-			if p.HostPort != 0 && int(p.HostPort) == int(pm.HostPort) {
-				return nil, nil, warnings, fmt.Errorf("SocketActivationPort host port %d conflicts with PublishPort host port", pm.HostPort)
+			if p.HostPort != 0 {
+				ph := int(p.HostPort)
+				pr := int(p.Range)
+				if pr == 0 {
+					pr = 1
+				}
+				if int(pm.HostPort) >= ph && int(pm.HostPort) < ph+pr {
+					return nil, nil, warnings, fmt.Errorf("SocketActivationPort host port %d conflicts with PublishPort host port", pm.HostPort)
+				}
 			}
 		}
 
