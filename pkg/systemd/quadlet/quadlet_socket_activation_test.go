@@ -6,9 +6,9 @@ import (
 	"strings"
 	"testing"
 
-	"go.podman.io/podman/v6/pkg/systemd/parser"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.podman.io/podman/v6/pkg/systemd/parser"
 )
 
 func makeContainerUnit(filename, content string) *parser.UnitFile {
@@ -341,9 +341,9 @@ func TestSocketActivationPort_Positive(t *testing.T) {
 		_, hasRN := proxyUnit.Lookup("Service", "RestrictNamespaces")
 		assert.False(t, hasRN, "RestrictNamespaces must NOT be present")
 
-		// No bash ExecStartPre
+		// Readiness probe present (socat/python3/bash fallback)
 		execPre := proxyUnit.LookupAll("Service", "ExecStartPre")
-		assert.Empty(t, execPre, "no bash readiness probe")
+		assert.NotEmpty(t, execPre, "readiness probe must be present")
 	})
 
 	// ConvertPod

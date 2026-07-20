@@ -44,6 +44,8 @@ Valid options for `[Pod]` are listed below:
 | PublishPort=8080:80                 | --publish 8080:80                      |
 | ServiceName=name                    | Name the systemd unit `name.service`   |
 | ShmSize=100m                        | --shm-size=100m                        |
+| SocketActivationPort=8080:80        | Enable socket activation for the pod    |
+| SocketActivationPortOptions=...     | Extra arguments to systemd-socket-proxyd |
 | SubGIDMap=gtest                     | --subgidname=gtest                     |
 | SubUIDMap=utest                     | --subuidname=utest                     |
 | UIDMap=0:10000:10                   | --uidmap=0:10000:10                    |
@@ -106,6 +108,8 @@ Setting this key overrides this behavior by instructing Quadlet to use the provi
 Note that the name should not include the `.service` file extension.
 
 @@option quadlet:shm-size
+
+@@option quadlet:socket-activation-port
 
 @@option quadlet:subgidname
 

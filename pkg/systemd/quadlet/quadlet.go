@@ -62,147 +62,147 @@ const (
 
 // All the supported quadlet keys
 const (
-	KeyAddCapability         = "AddCapability"
-	KeyAddDevice             = "AddDevice"
-	KeyAddHost               = "AddHost"
-	KeyAllTags               = "AllTags"
-	KeyAnnotation            = "Annotation"
-	KeyAppArmor              = "AppArmor"
-	KeyArch                  = "Arch"
-	KeyArtifact              = "Artifact"
-	KeyAuthFile              = "AuthFile"
-	KeyAutoUpdate            = "AutoUpdate"
-	KeyBuildArg              = "BuildArg"
-	KeyCertDir               = "CertDir"
-	KeyCgroupsMode           = "CgroupsMode"
-	KeyConfigMap             = "ConfigMap"
-	KeyContainerName         = "ContainerName"
-	KeyContainersConfModule  = "ContainersConfModule"
-	KeyCopy                  = "Copy"
-	KeyCreds                 = "Creds"
-	KeyDecryptionKey         = "DecryptionKey"
-	KeyDefaultDependencies   = "DefaultDependencies"
-	KeyDevice                = "Device"
-	KeyDisableDNS            = "DisableDNS"
-	KeyDNS                   = "DNS"
-	KeyDNSOption             = "DNSOption"
-	KeyDNSSearch             = "DNSSearch"
-	KeyDriver                = "Driver"
-	KeyDropCapability        = "DropCapability"
-	KeyEntrypoint            = "Entrypoint"
-	KeyEnvironment           = "Environment"
-	KeyEnvironmentFile       = "EnvironmentFile"
-	KeyEnvironmentHost       = "EnvironmentHost"
-	KeyExec                  = "Exec"
-	KeyExitCodePropagation   = "ExitCodePropagation"
-	KeyExitPolicy            = "ExitPolicy"
-	KeyExposeHostPort        = "ExposeHostPort"
-	KeyFile                  = "File"
-	KeyForceRM               = "ForceRM"
-	KeyGateway               = "Gateway"
-	KeyGID                   = "GID"
-	KeyGIDMap                = "GIDMap"
-	KeyGlobalArgs            = "GlobalArgs"
-	KeyGroup                 = "Group"
-	KeyGroupAdd              = "GroupAdd"
-	KeyHealthCmd             = "HealthCmd"
-	KeyHealthInterval        = "HealthInterval"
-	KeyHealthLogDestination  = "HealthLogDestination"
-	KeyHealthMaxLogCount     = "HealthMaxLogCount"
-	KeyHealthMaxLogSize      = "HealthMaxLogSize"
-	KeyHealthOnFailure       = "HealthOnFailure"
-	KeyHealthRetries         = "HealthRetries"
-	KeyHealthStartPeriod     = "HealthStartPeriod"
-	KeyHealthStartupCmd      = "HealthStartupCmd"
-	KeyHealthStartupInterval = "HealthStartupInterval"
-	KeyHealthStartupRetries  = "HealthStartupRetries"
-	KeyHealthStartupSuccess  = "HealthStartupSuccess"
-	KeyHealthStartupTimeout  = "HealthStartupTimeout"
-	KeyHealthTimeout         = "HealthTimeout"
-	KeyHostName              = "HostName"
-	KeyHttpProxy             = "HttpProxy"
-	KeyIgnoreFile            = "IgnoreFile"
-	KeyImage                 = "Image"
-	KeyImageTag              = "ImageTag"
-	KeyImageVolume           = "ImageVolume"
-	KeyInterfaceName         = "InterfaceName"
-	KeyInternal              = "Internal"
-	KeyIP                    = "IP"
-	KeyIP6                   = "IP6"
-	KeyIPAMDriver            = "IPAMDriver"
-	KeyIPRange               = "IPRange"
-	KeyIPv6                  = "IPv6"
-	KeyKubeDownForce         = "KubeDownForce"
-	KeyLabel                 = "Label"
-	KeyLogDriver             = "LogDriver"
-	KeyLogOpt                = "LogOpt"
-	KeyMask                  = "Mask"
-	KeyMemory                = "Memory"
-	KeyMount                 = "Mount"
-	KeyNetwork               = "Network"
-	KeyNetworkAlias          = "NetworkAlias"
-	KeyNetworkDeleteOnStop   = "NetworkDeleteOnStop"
-	KeyNetworkName           = "NetworkName"
-	KeyNoNewPrivileges       = "NoNewPrivileges"
-	KeyNotify                = "Notify"
-	KeyOptions               = "Options"
-	KeyOS                    = "OS"
-	KeyPidsLimit             = "PidsLimit"
-	KeyPod                   = "Pod"
-	KeyPodmanArgs            = "PodmanArgs"
-	KeyPodName               = "PodName"
-	KeyPolicy                = "Policy"
-	KeyPublishPort           = "PublishPort"
-	KeyPull                  = "Pull"
-	KeyQuiet                 = "Quiet"
-	KeyReadOnly              = "ReadOnly"
-	KeyReadOnlyTmpfs         = "ReadOnlyTmpfs"
-	KeyReloadCmd             = "ReloadCmd"
-	KeyReloadSignal          = "ReloadSignal"
-	KeyRemapGid              = "RemapGid"     // deprecated
-	KeyRemapUid              = "RemapUid"     // deprecated
-	KeyRemapUidSize          = "RemapUidSize" // deprecated
-	KeyRemapUsers            = "RemapUsers"   // deprecated
-	KeyRetry                 = "Retry"
-	KeyRetryDelay            = "RetryDelay"
-	KeyRootfs                = "Rootfs"
-	KeyRunInit               = "RunInit"
-	KeySeccompProfile        = "SeccompProfile"
-	KeySecret                = "Secret"
-	KeySecurityLabelDisable  = "SecurityLabelDisable"
-	KeySecurityLabelFileType = "SecurityLabelFileType"
-	KeySecurityLabelLevel    = "SecurityLabelLevel"
-	KeySecurityLabelNested   = "SecurityLabelNested"
-	KeySecurityLabelType     = "SecurityLabelType"
-	KeyServiceName           = "ServiceName"
-	KeySetWorkingDirectory   = "SetWorkingDirectory"
-	KeyShmSize               = "ShmSize"
-	KeySocketActivationPort          = "SocketActivationPort"
-	KeySocketActivationPortOptions   = "SocketActivationPortOptions"
-	KeyStartWithPod          = "StartWithPod"
-	KeyStopSignal            = "StopSignal"
-	KeyStopTimeout           = "StopTimeout"
-	KeySubGIDMap             = "SubGIDMap"
-	KeySubnet                = "Subnet"
-	KeySubUIDMap             = "SubUIDMap"
-	KeySysctl                = "Sysctl"
-	KeyTarget                = "Target"
-	KeyTimezone              = "Timezone"
-	KeyTLSVerify             = "TLSVerify"
-	KeyTmpfs                 = "Tmpfs"
-	KeyType                  = "Type"
-	KeyUID                   = "UID"
-	KeyUIDMap                = "UIDMap"
-	KeyUlimit                = "Ulimit"
-	KeyUnmask                = "Unmask"
-	KeyUser                  = "User"
-	KeyUserNS                = "UserNS"
-	KeyVariant               = "Variant"
-	KeyVolatileTmp           = "VolatileTmp" // deprecated
-	KeyVolume                = "Volume"
-	KeyVolumeName            = "VolumeName"
-	KeyWorkingDir            = "WorkingDir"
-	KeyYaml                  = "Yaml"
+	KeyAddCapability               = "AddCapability"
+	KeyAddDevice                   = "AddDevice"
+	KeyAddHost                     = "AddHost"
+	KeyAllTags                     = "AllTags"
+	KeyAnnotation                  = "Annotation"
+	KeyAppArmor                    = "AppArmor"
+	KeyArch                        = "Arch"
+	KeyArtifact                    = "Artifact"
+	KeyAuthFile                    = "AuthFile"
+	KeyAutoUpdate                  = "AutoUpdate"
+	KeyBuildArg                    = "BuildArg"
+	KeyCertDir                     = "CertDir"
+	KeyCgroupsMode                 = "CgroupsMode"
+	KeyConfigMap                   = "ConfigMap"
+	KeyContainerName               = "ContainerName"
+	KeyContainersConfModule        = "ContainersConfModule"
+	KeyCopy                        = "Copy"
+	KeyCreds                       = "Creds"
+	KeyDecryptionKey               = "DecryptionKey"
+	KeyDefaultDependencies         = "DefaultDependencies"
+	KeyDevice                      = "Device"
+	KeyDisableDNS                  = "DisableDNS"
+	KeyDNS                         = "DNS"
+	KeyDNSOption                   = "DNSOption"
+	KeyDNSSearch                   = "DNSSearch"
+	KeyDriver                      = "Driver"
+	KeyDropCapability              = "DropCapability"
+	KeyEntrypoint                  = "Entrypoint"
+	KeyEnvironment                 = "Environment"
+	KeyEnvironmentFile             = "EnvironmentFile"
+	KeyEnvironmentHost             = "EnvironmentHost"
+	KeyExec                        = "Exec"
+	KeyExitCodePropagation         = "ExitCodePropagation"
+	KeyExitPolicy                  = "ExitPolicy"
+	KeyExposeHostPort              = "ExposeHostPort"
+	KeyFile                        = "File"
+	KeyForceRM                     = "ForceRM"
+	KeyGateway                     = "Gateway"
+	KeyGID                         = "GID"
+	KeyGIDMap                      = "GIDMap"
+	KeyGlobalArgs                  = "GlobalArgs"
+	KeyGroup                       = "Group"
+	KeyGroupAdd                    = "GroupAdd"
+	KeyHealthCmd                   = "HealthCmd"
+	KeyHealthInterval              = "HealthInterval"
+	KeyHealthLogDestination        = "HealthLogDestination"
+	KeyHealthMaxLogCount           = "HealthMaxLogCount"
+	KeyHealthMaxLogSize            = "HealthMaxLogSize"
+	KeyHealthOnFailure             = "HealthOnFailure"
+	KeyHealthRetries               = "HealthRetries"
+	KeyHealthStartPeriod           = "HealthStartPeriod"
+	KeyHealthStartupCmd            = "HealthStartupCmd"
+	KeyHealthStartupInterval       = "HealthStartupInterval"
+	KeyHealthStartupRetries        = "HealthStartupRetries"
+	KeyHealthStartupSuccess        = "HealthStartupSuccess"
+	KeyHealthStartupTimeout        = "HealthStartupTimeout"
+	KeyHealthTimeout               = "HealthTimeout"
+	KeyHostName                    = "HostName"
+	KeyHttpProxy                   = "HttpProxy"
+	KeyIgnoreFile                  = "IgnoreFile"
+	KeyImage                       = "Image"
+	KeyImageTag                    = "ImageTag"
+	KeyImageVolume                 = "ImageVolume"
+	KeyInterfaceName               = "InterfaceName"
+	KeyInternal                    = "Internal"
+	KeyIP                          = "IP"
+	KeyIP6                         = "IP6"
+	KeyIPAMDriver                  = "IPAMDriver"
+	KeyIPRange                     = "IPRange"
+	KeyIPv6                        = "IPv6"
+	KeyKubeDownForce               = "KubeDownForce"
+	KeyLabel                       = "Label"
+	KeyLogDriver                   = "LogDriver"
+	KeyLogOpt                      = "LogOpt"
+	KeyMask                        = "Mask"
+	KeyMemory                      = "Memory"
+	KeyMount                       = "Mount"
+	KeyNetwork                     = "Network"
+	KeyNetworkAlias                = "NetworkAlias"
+	KeyNetworkDeleteOnStop         = "NetworkDeleteOnStop"
+	KeyNetworkName                 = "NetworkName"
+	KeyNoNewPrivileges             = "NoNewPrivileges"
+	KeyNotify                      = "Notify"
+	KeyOptions                     = "Options"
+	KeyOS                          = "OS"
+	KeyPidsLimit                   = "PidsLimit"
+	KeyPod                         = "Pod"
+	KeyPodmanArgs                  = "PodmanArgs"
+	KeyPodName                     = "PodName"
+	KeyPolicy                      = "Policy"
+	KeyPublishPort                 = "PublishPort"
+	KeyPull                        = "Pull"
+	KeyQuiet                       = "Quiet"
+	KeyReadOnly                    = "ReadOnly"
+	KeyReadOnlyTmpfs               = "ReadOnlyTmpfs"
+	KeyReloadCmd                   = "ReloadCmd"
+	KeyReloadSignal                = "ReloadSignal"
+	KeyRemapGid                    = "RemapGid"     // deprecated
+	KeyRemapUid                    = "RemapUid"     // deprecated
+	KeyRemapUidSize                = "RemapUidSize" // deprecated
+	KeyRemapUsers                  = "RemapUsers"   // deprecated
+	KeyRetry                       = "Retry"
+	KeyRetryDelay                  = "RetryDelay"
+	KeyRootfs                      = "Rootfs"
+	KeyRunInit                     = "RunInit"
+	KeySeccompProfile              = "SeccompProfile"
+	KeySecret                      = "Secret"
+	KeySecurityLabelDisable        = "SecurityLabelDisable"
+	KeySecurityLabelFileType       = "SecurityLabelFileType"
+	KeySecurityLabelLevel          = "SecurityLabelLevel"
+	KeySecurityLabelNested         = "SecurityLabelNested"
+	KeySecurityLabelType           = "SecurityLabelType"
+	KeyServiceName                 = "ServiceName"
+	KeySetWorkingDirectory         = "SetWorkingDirectory"
+	KeyShmSize                     = "ShmSize"
+	KeySocketActivationPort        = "SocketActivationPort"
+	KeySocketActivationPortOptions = "SocketActivationPortOptions"
+	KeyStartWithPod                = "StartWithPod"
+	KeyStopSignal                  = "StopSignal"
+	KeyStopTimeout                 = "StopTimeout"
+	KeySubGIDMap                   = "SubGIDMap"
+	KeySubnet                      = "Subnet"
+	KeySubUIDMap                   = "SubUIDMap"
+	KeySysctl                      = "Sysctl"
+	KeyTarget                      = "Target"
+	KeyTimezone                    = "Timezone"
+	KeyTLSVerify                   = "TLSVerify"
+	KeyTmpfs                       = "Tmpfs"
+	KeyType                        = "Type"
+	KeyUID                         = "UID"
+	KeyUIDMap                      = "UIDMap"
+	KeyUlimit                      = "Ulimit"
+	KeyUnmask                      = "Unmask"
+	KeyUser                        = "User"
+	KeyUserNS                      = "UserNS"
+	KeyVariant                     = "Variant"
+	KeyVolatileTmp                 = "VolatileTmp" // deprecated
+	KeyVolume                      = "Volume"
+	KeyVolumeName                  = "VolumeName"
+	KeyWorkingDir                  = "WorkingDir"
+	KeyYaml                        = "Yaml"
 )
 
 // Unsupported keys in the Service group. Defined here so we can error when they are found
@@ -255,103 +255,103 @@ var (
 			GroupName:  ContainerGroup,
 			XGroupName: XContainerGroup,
 			SupportedKeys: map[string]bool{
-				KeyAddCapability:         true,
-				KeyAddDevice:             true,
-				KeyAddHost:               true,
-				KeyAnnotation:            true,
-				KeyAppArmor:              true,
-				KeyAutoUpdate:            true,
-				KeyCgroupsMode:           true,
-				KeyContainerName:         true,
-				KeyContainersConfModule:  true,
-				KeyDNS:                   true,
-				KeyDNSOption:             true,
-				KeyDNSSearch:             true,
-				KeyDropCapability:        true,
-				KeyEnvironment:           true,
-				KeyEnvironmentFile:       true,
-				KeyEnvironmentHost:       true,
-				KeyEntrypoint:            true,
-				KeyExec:                  true,
-				KeyExposeHostPort:        true,
-				KeyGIDMap:                true,
-				KeyGlobalArgs:            true,
-				KeyGroup:                 true,
-				KeyGroupAdd:              true,
-				KeyHealthCmd:             true,
-				KeyHealthInterval:        true,
-				KeyHealthOnFailure:       true,
-				KeyHealthLogDestination:  true,
-				KeyHealthMaxLogCount:     true,
-				KeyHealthMaxLogSize:      true,
-				KeyHealthRetries:         true,
-				KeyHealthStartPeriod:     true,
-				KeyHealthStartupCmd:      true,
-				KeyHealthStartupInterval: true,
-				KeyHealthStartupRetries:  true,
-				KeyHealthStartupSuccess:  true,
-				KeyHealthStartupTimeout:  true,
-				KeyHealthTimeout:         true,
-				KeyHostName:              true,
-				KeyHttpProxy:             true,
-				KeyIP6:                   true,
-				KeyIP:                    true,
-				KeyImage:                 true,
-				KeyImageVolume:           true,
-				KeyLabel:                 true,
-				KeyLogDriver:             true,
-				KeyLogOpt:                true,
-				KeyMask:                  true,
-				KeyMemory:                true,
-				KeyMount:                 true,
-				KeyNetwork:               true,
-				KeyNetworkAlias:          true,
-				KeyNoNewPrivileges:       true,
-				KeyNotify:                true,
-				KeyPidsLimit:             true,
-				KeyPod:                   true,
-				KeyPodmanArgs:            true,
-				KeyPublishPort:           true,
-				KeyPull:                  true,
-				KeyReadOnly:              true,
-				KeyReadOnlyTmpfs:         true,
-				KeyReloadCmd:             true,
-				KeyReloadSignal:          true,
-				KeyRemapGid:              true,
-				KeyRemapUid:              true,
-				KeyRemapUidSize:          true,
-				KeyRemapUsers:            true,
-				KeyRetry:                 true,
-				KeyRetryDelay:            true,
-				KeyRootfs:                true,
-				KeyRunInit:               true,
-				KeySeccompProfile:        true,
-				KeySecret:                true,
-				KeySecurityLabelDisable:  true,
-				KeySecurityLabelFileType: true,
-				KeySecurityLabelLevel:    true,
-				KeySecurityLabelNested:   true,
-				KeySecurityLabelType:     true,
-				KeyServiceName:           true,
-				KeyShmSize:               true,
-				KeySocketActivationPort:           true,
-				KeySocketActivationPortOptions:    true,
-				KeyStopSignal:            true,
-				KeyStartWithPod:          true,
-				KeyStopTimeout:           true,
-				KeySubGIDMap:             true,
-				KeySubUIDMap:             true,
-				KeySysctl:                true,
-				KeyTimezone:              true,
-				KeyTmpfs:                 true,
-				KeyUIDMap:                true,
-				KeyUlimit:                true,
-				KeyUnmask:                true,
-				KeyUser:                  true,
-				KeyUserNS:                true,
-				KeyVolatileTmp:           true,
-				KeyVolume:                true,
-				KeyWorkingDir:            true,
+				KeyAddCapability:               true,
+				KeyAddDevice:                   true,
+				KeyAddHost:                     true,
+				KeyAnnotation:                  true,
+				KeyAppArmor:                    true,
+				KeyAutoUpdate:                  true,
+				KeyCgroupsMode:                 true,
+				KeyContainerName:               true,
+				KeyContainersConfModule:        true,
+				KeyDNS:                         true,
+				KeyDNSOption:                   true,
+				KeyDNSSearch:                   true,
+				KeyDropCapability:              true,
+				KeyEnvironment:                 true,
+				KeyEnvironmentFile:             true,
+				KeyEnvironmentHost:             true,
+				KeyEntrypoint:                  true,
+				KeyExec:                        true,
+				KeyExposeHostPort:              true,
+				KeyGIDMap:                      true,
+				KeyGlobalArgs:                  true,
+				KeyGroup:                       true,
+				KeyGroupAdd:                    true,
+				KeyHealthCmd:                   true,
+				KeyHealthInterval:              true,
+				KeyHealthOnFailure:             true,
+				KeyHealthLogDestination:        true,
+				KeyHealthMaxLogCount:           true,
+				KeyHealthMaxLogSize:            true,
+				KeyHealthRetries:               true,
+				KeyHealthStartPeriod:           true,
+				KeyHealthStartupCmd:            true,
+				KeyHealthStartupInterval:       true,
+				KeyHealthStartupRetries:        true,
+				KeyHealthStartupSuccess:        true,
+				KeyHealthStartupTimeout:        true,
+				KeyHealthTimeout:               true,
+				KeyHostName:                    true,
+				KeyHttpProxy:                   true,
+				KeyIP6:                         true,
+				KeyIP:                          true,
+				KeyImage:                       true,
+				KeyImageVolume:                 true,
+				KeyLabel:                       true,
+				KeyLogDriver:                   true,
+				KeyLogOpt:                      true,
+				KeyMask:                        true,
+				KeyMemory:                      true,
+				KeyMount:                       true,
+				KeyNetwork:                     true,
+				KeyNetworkAlias:                true,
+				KeyNoNewPrivileges:             true,
+				KeyNotify:                      true,
+				KeyPidsLimit:                   true,
+				KeyPod:                         true,
+				KeyPodmanArgs:                  true,
+				KeyPublishPort:                 true,
+				KeyPull:                        true,
+				KeyReadOnly:                    true,
+				KeyReadOnlyTmpfs:               true,
+				KeyReloadCmd:                   true,
+				KeyReloadSignal:                true,
+				KeyRemapGid:                    true,
+				KeyRemapUid:                    true,
+				KeyRemapUidSize:                true,
+				KeyRemapUsers:                  true,
+				KeyRetry:                       true,
+				KeyRetryDelay:                  true,
+				KeyRootfs:                      true,
+				KeyRunInit:                     true,
+				KeySeccompProfile:              true,
+				KeySecret:                      true,
+				KeySecurityLabelDisable:        true,
+				KeySecurityLabelFileType:       true,
+				KeySecurityLabelLevel:          true,
+				KeySecurityLabelNested:         true,
+				KeySecurityLabelType:           true,
+				KeyServiceName:                 true,
+				KeyShmSize:                     true,
+				KeySocketActivationPort:        true,
+				KeySocketActivationPortOptions: true,
+				KeyStopSignal:                  true,
+				KeyStartWithPod:                true,
+				KeyStopTimeout:                 true,
+				KeySubGIDMap:                   true,
+				KeySubUIDMap:                   true,
+				KeySysctl:                      true,
+				KeyTimezone:                    true,
+				KeyTmpfs:                       true,
+				KeyUIDMap:                      true,
+				KeyUlimit:                      true,
+				KeyUnmask:                      true,
+				KeyUser:                        true,
+				KeyUserNS:                      true,
+				KeyVolatileTmp:                 true,
+				KeyVolume:                      true,
+				KeyWorkingDir:                  true,
 			},
 		},
 		VolumeGroup: {
@@ -506,37 +506,37 @@ var (
 			GroupName:  PodGroup,
 			XGroupName: XPodGroup,
 			SupportedKeys: map[string]bool{
-				KeyAddHost:              true,
-				KeyContainersConfModule: true,
-				KeyDNS:                  true,
-				KeyDNSOption:            true,
-				KeyDNSSearch:            true,
-				KeyExitPolicy:           true,
-				KeyGIDMap:               true,
-				KeyGlobalArgs:           true,
-				KeyHostName:             true,
-				KeyIP:                   true,
-				KeyIP6:                  true,
-				KeyLabel:                true,
-				KeyNetwork:              true,
-				KeyNetworkAlias:         true,
-				KeyPodName:              true,
-				KeyPodmanArgs:           true,
-				KeyPublishPort:          true,
-				KeyRemapGid:             true,
-				KeyRemapUid:             true,
-				KeyRemapUidSize:         true,
-				KeyRemapUsers:           true,
-				KeyServiceName:          true,
-				KeyShmSize:              true,
-				KeySocketActivationPort:           true,
-				KeySocketActivationPortOptions:    true,
-				KeyStopTimeout:          true,
-				KeySubGIDMap:            true,
-				KeySubUIDMap:            true,
-				KeyUIDMap:               true,
-				KeyUserNS:               true,
-				KeyVolume:               true,
+				KeyAddHost:                     true,
+				KeyContainersConfModule:        true,
+				KeyDNS:                         true,
+				KeyDNSOption:                   true,
+				KeyDNSSearch:                   true,
+				KeyExitPolicy:                  true,
+				KeyGIDMap:                      true,
+				KeyGlobalArgs:                  true,
+				KeyHostName:                    true,
+				KeyIP:                          true,
+				KeyIP6:                         true,
+				KeyLabel:                       true,
+				KeyNetwork:                     true,
+				KeyNetworkAlias:                true,
+				KeyPodName:                     true,
+				KeyPodmanArgs:                  true,
+				KeyPublishPort:                 true,
+				KeyRemapGid:                    true,
+				KeyRemapUid:                    true,
+				KeyRemapUidSize:                true,
+				KeyRemapUsers:                  true,
+				KeyServiceName:                 true,
+				KeyShmSize:                     true,
+				KeySocketActivationPort:        true,
+				KeySocketActivationPortOptions: true,
+				KeyStopTimeout:                 true,
+				KeySubGIDMap:                   true,
+				KeySubUIDMap:                   true,
+				KeyUIDMap:                      true,
+				KeyUserNS:                      true,
+				KeyVolume:                      true,
 			},
 		},
 	}
@@ -608,7 +608,6 @@ func usernsOpts(kind string, opts []string) string {
 type SocketActivationPortSpec struct {
 	types.PortMapping
 	InternalPort int
-	RawSpec      string
 }
 
 func resolveSocketActivationPorts(unitFile *parser.UnitFile, groupName string) ([]SocketActivationPortSpec, []string, error, error) {
@@ -620,7 +619,10 @@ func resolveSocketActivationPorts(unitFile *parser.UnitFile, groupName string) (
 	}
 
 	usedPorts := make(map[int]bool)
-	ppPorts, _ := specgenutil.CreatePortBindings(unitFile.LookupAll(groupName, KeyPublishPort))
+	ppPorts, ppErr := specgenutil.CreatePortBindings(unitFile.LookupAll(groupName, KeyPublishPort))
+	if ppErr != nil {
+		warnings = errors.Join(warnings, fmt.Errorf("PublishPort: %w", ppErr))
+	}
 	for _, p := range ppPorts {
 		if p.HostPort != 0 {
 			usedPorts[int(p.HostPort)] = true
@@ -700,6 +702,9 @@ func resolveSocketActivationPorts(unitFile *parser.UnitFile, groupName string) (
 		if internalPort < 1024 {
 			internalPort = 1024
 		}
+		if internalPort > 65535 {
+			return nil, nil, warnings, fmt.Errorf("no available internal port found for socket activation (exhausted port range)")
+		}
 
 		for usedPorts[internalPort] || internalPort == int(pm.HostPort) {
 			internalPort++
@@ -714,7 +719,6 @@ func resolveSocketActivationPorts(unitFile *parser.UnitFile, groupName string) (
 		ports = append(ports, SocketActivationPortSpec{
 			PortMapping:  pm,
 			InternalPort: internalPort,
-			RawSpec:      rawSpec,
 		})
 	}
 
@@ -791,13 +795,25 @@ func generateSAPUnits(spec SocketActivationPortSpec, options []string, serviceNa
 	proxyUnit.Add(UnitGroup, "PartOf", containerServiceFile)
 
 	target := fmt.Sprintf("127.0.0.1:%d", spec.InternalPort)
+	pollTimeout := strconv.Itoa(120)
+
+	if socatPath, err := exec.LookPath("socat"); err == nil {
+		proxyUnit.AddCmdline(ServiceGroup, "ExecStartPre", []string{socatPath, "-u", "/dev/null", fmt.Sprintf("TCP:127.0.0.1:%d,connect-timeout=%s", spec.InternalPort, pollTimeout)})
+	} else if python3Path, err := exec.LookPath("python3"); err == nil {
+		proxyUnit.AddCmdline(ServiceGroup, "ExecStartPre", []string{python3Path, "-c", fmt.Sprintf("import socket; s=socket.socket(); s.settimeout(%s); s.connect(('127.0.0.1',%d)); s.close()", pollTimeout, spec.InternalPort)})
+	} else if bashPath, err := exec.LookPath("bash"); err == nil {
+		proxyUnit.AddCmdline(ServiceGroup, "ExecStartPre", []string{bashPath, "-c", fmt.Sprintf("for i in $(seq 1 600); do exec 3<>/dev/tcp/127.0.0.1/%d && exit 0; sleep 0.2; done; exit 1", spec.InternalPort)})
+	} else {
+		warnings = errors.Join(warnings, fmt.Errorf("no readiness probe available for port %s (socat, python3, and bash not found)", portStr))
+	}
+
 	if proxydPath != "" {
 		args := []string{proxydPath}
 		args = append(args, options...)
 		args = append(args, target)
 		proxyUnit.AddCmdline(ServiceGroup, "ExecStart", args)
 	} else {
-		args := options
+		args := append([]string{"systemd-socket-proxyd"}, options...)
 		args = append(args, target)
 		proxyUnit.AddCmdline(ServiceGroup, "ExecStart", args)
 	}
@@ -1117,9 +1133,7 @@ func ConvertContainer(container *parser.UnitFile, unitsInfoMap map[string]*UnitI
 	for _, netw := range container.LookupAll(ContainerGroup, KeyNetwork) {
 		if netw == "host" {
 			hasHostNetwork = true
-			break
-		}
-		if netw == "none" || strings.HasPrefix(netw, "container:") || strings.HasSuffix(netw, ".container") {
+		} else if netw == "none" || strings.HasPrefix(netw, "container:") || strings.HasSuffix(netw, ".container") {
 			return nil, warnings, fmt.Errorf("SocketActivationPort requires a network whose published port is reachable on the loopback where the proxy runs; Network=%s unsupported", netw), nil
 		}
 	}
@@ -1962,9 +1976,7 @@ func ConvertPod(podUnit *parser.UnitFile, unitsInfoMap map[string]*UnitInfo, isU
 	for _, netw := range podUnit.LookupAll(PodGroup, KeyNetwork) {
 		if netw == "host" {
 			podHasHost = true
-			break
-		}
-		if netw == "none" || strings.HasPrefix(netw, "container:") || strings.HasSuffix(netw, ".container") {
+		} else if netw == "none" || strings.HasPrefix(netw, "container:") || strings.HasSuffix(netw, ".container") {
 			return nil, warnings, fmt.Errorf("SocketActivationPort requires a network whose published port is reachable on the loopback where the proxy runs; Network=%s unsupported", netw), nil
 		}
 	}
@@ -1983,9 +1995,6 @@ func ConvertPod(podUnit *parser.UnitFile, unitsInfoMap map[string]*UnitInfo, isU
 		}
 		for _, p := range podSapPorts {
 			execStartPre.add("--publish", fmt.Sprintf("127.0.0.1:%d:%d", p.InternalPort, p.ContainerPort))
-		}
-		if !podUnit.HasKey(ServiceGroup, "Restart") {
-			service.Set(ServiceGroup, "Restart", "on-failure")
 		}
 	}
 
@@ -2038,7 +2047,8 @@ func ConvertPod(podUnit *parser.UnitFile, unitsInfoMap map[string]*UnitInfo, isU
 	// Set PODMAN_SYSTEMD_UNIT so that podman auto-update can restart the service.
 	service.Add(ServiceGroup, "Environment", "PODMAN_SYSTEMD_UNIT=%n")
 
-	service.Setv(ServiceGroup,
+	service.Setv(
+		ServiceGroup,
 		"Type", "forking",
 		"PIDFile", "%t/%N.pid",
 	)

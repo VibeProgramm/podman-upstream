@@ -110,6 +110,8 @@ Valid options for `[Container]` are listed below:
 | SecurityLabelNested=true             | --security-opt label=nested                          |
 | SecurityLabelType=spc_t              | --security-opt label=type:spc_t                      |
 | ShmSize=100m                         | --shm-size=100m                                      |
+| SocketActivationPort=8080:80         | Enable socket activation for the specified port       |
+| SocketActivationPortOptions=...      | Extra arguments passed to systemd-socket-proxyd       |
 | StartWithPod=true                    | If Pod= is defined, container is started by pod      |
 | StopSignal=SIGINT                    | --stop-signal=SIGINT                                 |
 | StopTimeout=20                       | --stop-timeout=20                                    |
@@ -338,6 +340,8 @@ Allow SecurityLabels to function within the container. This allows separation of
 Set the label process type for the container processes.
 
 @@option quadlet:shm-size
+
+@@option quadlet:socket-activation-port
 
 ### `StartWithPod=bool`
 
