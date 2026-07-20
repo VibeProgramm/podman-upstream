@@ -729,9 +729,6 @@ func resolveSocketActivationPorts(unitFile *parser.UnitFile, groupName string) (
 		if internalPort < lastAssignedPort {
 			internalPort = lastAssignedPort
 		}
-		if internalPort < minUnprivilegedPort {
-			internalPort = minUnprivilegedPort
-		}
 		if internalPort > 65535 {
 			return nil, nil, warnings, fmt.Errorf("no available internal port found for socket activation (exhausted port range)")
 		}
@@ -840,16 +837,13 @@ func generateSAPUnits(spec SocketActivationPortSpec, options []string, serviceNa
 		warnings = errors.Join(warnings, fmt.Errorf("no readiness probe available for port %s (socat, python3, and bash not found)", portStr))
 	}
 
-	if proxydPath != "" {
-		args := []string{proxydPath}
-		args = append(args, options...)
-		args = append(args, target)
-		proxyUnit.AddCmdline(ServiceGroup, "ExecStart", args)
-	} else {
-		args := append([]string{"systemd-socket-proxyd"}, options...)
-		args = append(args, target)
-		proxyUnit.AddCmdline(ServiceGroup, "ExecStart", args)
+	path := proxydPath
+	if path == "" {
+		path = "systemd-socket-proxyd"
 	}
+	args := append([]string{path}, options...)
+	args = append(args, target)
+	proxyUnit.AddCmdline(ServiceGroup, "ExecStart", args)
 
 	proxyUnit.Set(ServiceGroup, "Type", "simple")
 	proxyUnit.Set(ServiceGroup, "Restart", "no")
@@ -1176,9 +1170,7 @@ func ConvertContainer(container *parser.UnitFile, unitsInfoMap map[string]*UnitI
 			hasSAP = false
 			sapPorts = nil
 		}
-	}
 
-	if hasSAP {
 		if IsTemplateUnitFileName(container.Filename) && !container.HasKey(InstallGroup, "DefaultInstance") {
 			return nil, warnings, fmt.Errorf("SocketActivationPort on a template unit requires per-instance ports, which are not supported in v1 (use DefaultInstance=1 to enable a single instance, or a non-template unit)"), nil
 		}
@@ -2021,9 +2013,7 @@ func ConvertPod(podUnit *parser.UnitFile, unitsInfoMap map[string]*UnitInfo, isU
 			podHasSAP = false
 			podSAPPorts = nil
 		}
-	}
 
-	if podHasSAP {
 		if IsTemplateUnitFileName(podUnit.Filename) && !podUnit.HasKey(InstallGroup, "DefaultInstance") {
 			return nil, warnings, fmt.Errorf("SocketActivationPort on a template unit requires per-instance ports, which are not supported in v1 (use DefaultInstance=1 to enable a single instance, or a non-template unit)"), nil
 		}
