@@ -229,8 +229,9 @@ type GroupInfo struct {
 }
 
 var (
-	URL            = regexp.Delayed(`^((https?)|(git)://)|(github\.com/).+$`)
-	validPortRange = regexp.Delayed(`\d+(-\d+)?(/udp|/tcp)?$`)
+	URL                     = regexp.Delayed(`^((https?)|(git)://)|(github\.com/).+$`)
+	validPortRange          = regexp.Delayed(`\d+(-\d+)?(/udp|/tcp)?$`)
+	systemdSpecifierPattern = regexp.Delayed(`%[iInNpPjJfFtThHsSmMbBvVH]([^a-zA-Z0-9]|$)`)
 
 	unitDependencyKeys = []string{
 		"After",
@@ -676,14 +677,7 @@ func resolveSocketActivationPorts(unitFile *parser.UnitFile, groupName string) (
 		if len(rawSpec) == 0 {
 			continue
 		}
-		if strings.Contains(rawSpec, "%i") || strings.Contains(rawSpec, "%I") ||
-			strings.Contains(rawSpec, "%n") || strings.Contains(rawSpec, "%N") ||
-			strings.Contains(rawSpec, "%p") || strings.Contains(rawSpec, "%P") ||
-			strings.Contains(rawSpec, "%j") || strings.Contains(rawSpec, "%J") ||
-			strings.Contains(rawSpec, "%h") || strings.Contains(rawSpec, "%H") ||
-			strings.Contains(rawSpec, "%f") || strings.Contains(rawSpec, "%t") ||
-			strings.Contains(rawSpec, "%s") || strings.Contains(rawSpec, "%m") ||
-			strings.Contains(rawSpec, "%b") || strings.Contains(rawSpec, "%v") {
+		if systemdSpecifierPattern.MatchString(rawSpec) {
 			return nil, nil, warnings, fmt.Errorf("SocketActivationPort does not support systemd specifiers in port numbers")
 		}
 
@@ -741,6 +735,9 @@ func resolveSocketActivationPorts(unitFile *parser.UnitFile, groupName string) (
 
 		usedPorts[internalPort] = true
 		prevInternal = internalPort + 1
+		if prevInternal > 65535 {
+			prevInternal = 1024
+		}
 
 		ports = append(ports, SocketActivationPortSpec{
 			PortMapping:  pm,
