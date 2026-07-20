@@ -157,7 +157,7 @@ func TestSocketActivationPort_Positive(t *testing.T) {
 		socketUnit := extras[0]
 		assert.Equal(t, "test-8080.socket", socketUnit.Filename)
 		listen, _ := socketUnit.Lookup("Socket", "ListenStream")
-		assert.Equal(t, "8080", listen)
+		assert.Equal(t, "127.0.0.1:8080", listen)
 		serviceRef, _ := socketUnit.Lookup("Socket", "Service")
 		assert.Equal(t, "test-8080-proxy.service", serviceRef)
 
@@ -341,9 +341,9 @@ func TestSocketActivationPort_Positive(t *testing.T) {
 		_, hasRN := proxyUnit.Lookup("Service", "RestrictNamespaces")
 		assert.False(t, hasRN, "RestrictNamespaces must NOT be present")
 
-		// Readiness probe present (socat/python3/bash fallback)
+		// No readiness probe in v2
 		execPre := proxyUnit.LookupAll("Service", "ExecStartPre")
-		assert.NotEmpty(t, execPre, "readiness probe must be present")
+		assert.Empty(t, execPre, "no readiness probe")
 	})
 
 	// ConvertPod
@@ -418,6 +418,58 @@ func TestSocketActivationPort_Positive(t *testing.T) {
 		execStart := proxyUnit.LookupAll("Service", "ExecStart")
 		require.Len(t, execStart, 1)
 		assert.True(t, strings.Contains(execStart[0], "--buffer-size=65536"))
+	})
+
+	t.Run("PodmanArgs --publish= parse error warning", func(t *testing.T) {
+		u := makeContainerUnit("test.container", "[Container]\nImage=test\nSocketActivationPort=8080:80\nPodmanArgs=--publish=::::\n")
+		unitsInfoMap := map[string]*UnitInfo{
+			"test.container": {ServiceName: "test", ResourceName: "systemd-test"},
+		}
+		_, warnings, err, _ := ConvertContainer(u, unitsInfoMap, false)
+		require.NoError(t, err)
+		require.NotNil(t, warnings)
+		assert.Contains(t, warnings.Error(), "PodmanArgs")
+	})
+
+	t.Run("PodmanArgs --publish= exact conflict error", func(t *testing.T) {
+		u := makeContainerUnit("test.container", "[Container]\nImage=test\nSocketActivationPort=8080:80\nPodmanArgs=--publish=8080:80\n")
+		unitsInfoMap := map[string]*UnitInfo{
+			"test.container": {ServiceName: "test", ResourceName: "systemd-test"},
+		}
+		_, _, err, _ := ConvertContainer(u, unitsInfoMap, false)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "conflicts with PodmanArgs")
+	})
+
+	t.Run("PodmanArgs --publish= range conflict error", func(t *testing.T) {
+		u := makeContainerUnit("test.container", "[Container]\nImage=test\nSocketActivationPort=8081:80\nPodmanArgs=--publish=8080-8082:80-82\n")
+		unitsInfoMap := map[string]*UnitInfo{
+			"test.container": {ServiceName: "test", ResourceName: "systemd-test"},
+		}
+		_, _, err, _ := ConvertContainer(u, unitsInfoMap, false)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "conflicts with PodmanArgs")
+	})
+
+	t.Run("PodmanArgs --publish= no conflict warning", func(t *testing.T) {
+		u := makeContainerUnit("test.container", "[Container]\nImage=test\nSocketActivationPort=8080:80\nPodmanArgs=--publish=9090:80\n")
+		unitsInfoMap := map[string]*UnitInfo{
+			"test.container": {ServiceName: "test", ResourceName: "systemd-test"},
+		}
+		_, warnings, err, _ := ConvertContainer(u, unitsInfoMap, false)
+		require.NoError(t, err)
+		require.NotNil(t, warnings)
+		assert.Contains(t, warnings.Error(), "PodmanArgs")
+	})
+
+	t.Run("Pod PodmanArgs --publish= conflict", func(t *testing.T) {
+		u := makeContainerUnit("test.pod", "[Pod]\nPodName=test\nSocketActivationPort=8080:80\nPodmanArgs=--publish=8080:80\n")
+		unitsInfoMap := map[string]*UnitInfo{
+			"test.pod": {ServiceName: "test-pod", ResourceName: "systemd-test-pod"},
+		}
+		_, _, err, _ := ConvertPod(u, unitsInfoMap, false)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "conflicts with PodmanArgs")
 	})
 }
 

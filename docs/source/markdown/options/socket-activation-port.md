@@ -2,7 +2,7 @@
 ####>   podman podman-container.unit.5.md.in, podman-pod.unit.5.md.in
 ####> If file is edited, make sure the changes
 ####> are applicable to all of those.
-### `SocketActivationPort=[[hostIP:]hostPort:]containerPort`
+### `SocketActivationPort=[hostIP:]hostPort:containerPort`
 
 Enable systemd socket activation for the container or pod. When specified, Quadlet generates
 a `.socket` unit and a `-proxy.service` unit alongside the main `.service` unit.

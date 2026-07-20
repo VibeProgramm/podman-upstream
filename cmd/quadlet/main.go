@@ -526,6 +526,8 @@ func process() bool {
 	// Generate the PodsInfoMap to allow containers to link to their pods and add themselves to the pod's containers list
 	unitsInfoMap := generateUnitsInfoMap(units)
 
+	generatedFiles := make(map[string]string)
+
 	for _, unit := range units {
 		var service *parser.UnitFile
 		var extras []*parser.UnitFile
@@ -570,6 +572,12 @@ func process() bool {
 
 		service.Path = path.Join(outputPath, service.Filename)
 
+		if prevUnit, exists := generatedFiles[service.Filename]; exists {
+			reportError(fmt.Errorf("generated file %q would overwrite file from %q — duplicate service name", service.Filename, prevUnit))
+			continue
+		}
+		generatedFiles[service.Filename] = unit.Filename
+
 		if dryRunFlag {
 			data, err := service.ToString()
 			if err != nil {
@@ -579,6 +587,11 @@ func process() bool {
 			fmt.Printf("---%s---\n%s\n", service.Path, data)
 			for _, extra := range extras {
 				extra.Path = path.Join(outputPath, extra.Filename)
+				if prevUnit, exists := generatedFiles[extra.Filename]; exists {
+					reportError(fmt.Errorf("generated file %q would overwrite file from %q — duplicate socket/proxy name", extra.Filename, prevUnit))
+					continue
+				}
+				generatedFiles[extra.Filename] = unit.Filename
 				data, err := extra.ToString()
 				if err != nil {
 					reportError(fmt.Errorf("parsing %s: %w", extra.Path, err))
@@ -594,6 +607,11 @@ func process() bool {
 		enableServiceFile(outputPath, service)
 		for _, extra := range extras {
 			extra.Path = path.Join(outputPath, extra.Filename)
+			if prevUnit, exists := generatedFiles[extra.Filename]; exists {
+				reportError(fmt.Errorf("generated file %q would overwrite file from %q — duplicate socket/proxy name", extra.Filename, prevUnit))
+				continue
+			}
+			generatedFiles[extra.Filename] = unit.Filename
 			if err := generateServiceFile(extra); err != nil {
 				reportError(fmt.Errorf("generating extra file %s: %w", extra.Path, err))
 			}
