@@ -528,6 +528,7 @@ func process() bool {
 
 	for _, unit := range units {
 		var service *parser.UnitFile
+		var extras []*parser.UnitFile
 		var warnings, err error
 
 		warnIfUnsupportedServiceKeys(unit)
@@ -535,7 +536,7 @@ func process() bool {
 		switch {
 		case strings.HasSuffix(unit.Filename, ".container"):
 			warnIfAmbiguousName(unit, quadlet.ContainerGroup)
-			service, warnings, err = quadlet.ConvertContainer(unit, unitsInfoMap, isUserFlag)
+			service, warnings, err, extras = quadlet.ConvertContainer(unit, unitsInfoMap, isUserFlag)
 		case strings.HasSuffix(unit.Filename, ".volume"):
 			warnIfAmbiguousName(unit, quadlet.VolumeGroup)
 			service, warnings, err = quadlet.ConvertVolume(unit, unitsInfoMap, isUserFlag)
@@ -552,7 +553,7 @@ func process() bool {
 			warnIfAmbiguousName(unit, quadlet.ArtifactGroup)
 			service, err = quadlet.ConvertArtifact(unit, unitsInfoMap, isUserFlag)
 		case strings.HasSuffix(unit.Filename, ".pod"):
-			service, warnings, err = quadlet.ConvertPod(unit, unitsInfoMap, isUserFlag)
+			service, warnings, err, extras = quadlet.ConvertPod(unit, unitsInfoMap, isUserFlag)
 		default:
 			Logf("Unsupported file type %q", unit.Filename)
 			continue
@@ -576,12 +577,28 @@ func process() bool {
 				continue
 			}
 			fmt.Printf("---%s---\n%s\n", service.Path, data)
+			for _, extra := range extras {
+				extra.Path = path.Join(outputPath, extra.Filename)
+				data, err := extra.ToString()
+				if err != nil {
+					reportError(fmt.Errorf("parsing %s: %w", extra.Path, err))
+					continue
+				}
+				fmt.Printf("---%s---\n%s\n", extra.Path, data)
+			}
 			continue
 		}
 		if err := generateServiceFile(service); err != nil {
 			reportError(fmt.Errorf("generating service file %s: %w", service.Path, err))
 		}
 		enableServiceFile(outputPath, service)
+		for _, extra := range extras {
+			extra.Path = path.Join(outputPath, extra.Filename)
+			if err := generateServiceFile(extra); err != nil {
+				reportError(fmt.Errorf("generating extra file %s: %w", extra.Path, err))
+			}
+			enableServiceFile(outputPath, extra)
+		}
 	}
 	return processErred
 }

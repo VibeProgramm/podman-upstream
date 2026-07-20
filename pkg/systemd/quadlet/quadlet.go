@@ -5,10 +5,15 @@ import (
 	"encoding/csv"
 	"errors"
 	"fmt"
+	"net"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 
+	"go.podman.io/common/libnetwork/types"
+	"go.podman.io/podman/v6/pkg/specgenutil"
 	"go.podman.io/podman/v6/pkg/specgenutilexternal"
 	"go.podman.io/podman/v6/pkg/systemd/parser"
 	"go.podman.io/storage/pkg/regexp"
@@ -196,6 +201,10 @@ const (
 	KeyVolumeName            = "VolumeName"
 	KeyWorkingDir            = "WorkingDir"
 	KeyYaml                  = "Yaml"
+
+	KeySocketActivationPort          = "SocketActivationPort"
+	KeySocketActivationPortOptions   = "SocketActivationPortOptions"
+	KeySocketActivationInternalPort  = "SocketActivationInternalPort"
 )
 
 // Unsupported keys in the Service group. Defined here so we can error when they are found
@@ -327,6 +336,9 @@ var (
 				KeySecurityLabelType:     true,
 				KeyServiceName:           true,
 				KeyShmSize:               true,
+				KeySocketActivationPort:           true,
+				KeySocketActivationPortOptions:    true,
+				KeySocketActivationInternalPort:   true,
 				KeyStopSignal:            true,
 				KeyStartWithPod:          true,
 				KeyStopTimeout:           true,
@@ -520,6 +532,9 @@ var (
 				KeyRemapUsers:           true,
 				KeyServiceName:          true,
 				KeyShmSize:              true,
+				KeySocketActivationPort:           true,
+				KeySocketActivationPortOptions:    true,
+				KeySocketActivationInternalPort:   true,
 				KeyStopTimeout:          true,
 				KeySubGIDMap:            true,
 				KeySubUIDMap:            true,
@@ -594,32 +609,259 @@ func usernsOpts(kind string, opts []string) string {
 	return res.String()
 }
 
+type SocketActivationPortSpec struct {
+	types.PortMapping
+	InternalPort int
+	RawSpec      string
+}
+
+type socketActivationConfig struct {
+	Port    SocketActivationPortSpec
+	HasPort bool
+	Options []string
+}
+
+func resolveSocketActivationPort(unitFile *parser.UnitFile, groupName string) (*socketActivationConfig, error, error) {
+	var warnings error
+
+	sapEntries := unitFile.LookupAll(groupName, KeySocketActivationPort)
+	if len(sapEntries) == 0 {
+		return &socketActivationConfig{}, warnings, nil
+	}
+	if len(sapEntries) > 1 {
+		return nil, warnings, fmt.Errorf("SocketActivationPort supports at most one entry in this version (SAP014)")
+	}
+
+	config := &socketActivationConfig{HasPort: true}
+	config.Port.RawSpec = sapEntries[0]
+
+	portMappings, err := specgenutil.CreatePortBindings([]string{config.Port.RawSpec})
+	if err != nil {
+		return nil, warnings, fmt.Errorf("SocketActivationPort: %w", err)
+	}
+	pm := portMappings[0]
+
+	if pm.HostPort == 0 {
+		return nil, warnings, fmt.Errorf("SocketActivationPort requires explicit host port (empty host port not allowed)")
+	}
+	if pm.Range > 1 {
+		return nil, warnings, fmt.Errorf("SocketActivationPort does not support port ranges")
+	}
+	if pm.Protocol != "" && !strings.EqualFold(pm.Protocol, "tcp") {
+		return nil, warnings, fmt.Errorf("SocketActivationPort only supports TCP protocol")
+	}
+	if pm.ContainerPort == 0 {
+		return nil, warnings, fmt.Errorf("must provide a non-empty container port to publish")
+	}
+	if strings.Contains(config.Port.RawSpec, "%") {
+		return nil, warnings, fmt.Errorf("SocketActivationPort does not support systemd specifiers in port numbers")
+	}
+
+	config.Port.PortMapping = pm
+	config.Port.Protocol = "tcp"
+
+	usedPorts := make(map[int]bool)
+	usedPorts[int(pm.HostPort)] = true
+
+	ppPorts, _ := specgenutil.CreatePortBindings(unitFile.LookupAll(groupName, KeyPublishPort))
+	for _, p := range ppPorts {
+		if p.HostPort != 0 && int(p.HostPort) == int(pm.HostPort) {
+			return nil, warnings, fmt.Errorf("SocketActivationPort host port %d conflicts with PublishPort host port", pm.HostPort)
+		}
+		if p.HostPort != 0 {
+			usedPorts[int(p.HostPort)] = true
+		}
+		usedPorts[int(p.ContainerPort)] = true
+	}
+
+	for _, ep := range unitFile.LookupAll(groupName, KeyExposeHostPort) {
+		ep = strings.TrimSpace(ep)
+		portStr, _, _ := strings.Cut(ep, "/")
+		if dash := strings.IndexByte(portStr, '-'); dash >= 0 {
+			startStr, endStr := portStr[:dash], portStr[dash+1:]
+			start, err1 := strconv.Atoi(startStr)
+			end, err2 := strconv.Atoi(endStr)
+			if err1 == nil && err2 == nil && start > 0 && end >= start && end <= 65535 {
+				for p := start; p <= end; p++ {
+					usedPorts[p] = true
+				}
+			}
+		} else {
+			port, err := strconv.Atoi(portStr)
+			if err == nil && port > 0 && port <= 65535 {
+				usedPorts[port] = true
+			}
+		}
+	}
+
+	config.Port.InternalPort = int(pm.ContainerPort)
+
+	if internalStr, ok := unitFile.Lookup(groupName, KeySocketActivationInternalPort); ok {
+		internalPort, err := strconv.Atoi(internalStr)
+		if err != nil || internalPort < 1 || internalPort > 65535 {
+			return nil, warnings, fmt.Errorf("SocketActivationInternalPort: port numbers must be between 1 and 65535")
+		}
+		if usedPorts[internalPort] {
+			return nil, warnings, fmt.Errorf("internal port %d already in use by another port mapping", internalPort)
+		}
+		config.Port.InternalPort = internalPort
+	}
+
+	if config.Port.InternalPort == int(pm.HostPort) {
+		return nil, warnings, fmt.Errorf("SocketActivationPort host port %d equals internal port %d, which would create a proxy self-loop", pm.HostPort, config.Port.InternalPort)
+	}
+
+	for usedPorts[config.Port.InternalPort] {
+		config.Port.InternalPort++
+		if config.Port.InternalPort > 65535 {
+			return nil, warnings, fmt.Errorf("no available internal port found for socket activation (exhausted port range)")
+		}
+	}
+
+	config.Options = unitFile.LookupAllArgs(groupName, KeySocketActivationPortOptions)
+	for _, opt := range config.Options {
+		name, _, _ := strings.Cut(opt, "=")
+		if name != "--timeout" && name != "--buffer-size" && name != "--verbose" {
+			return nil, warnings, fmt.Errorf("SocketActivationPortOptions contains unknown option %q", opt)
+		}
+	}
+
+	return config, warnings, nil
+}
+
+func validateSAPNetworkMode(unitFile *parser.UnitFile, groupName string, config *socketActivationConfig) (error, error) {
+	if !config.HasPort {
+		return nil, nil
+	}
+	networks := unitFile.LookupAll(groupName, KeyNetwork)
+	for _, netw := range networks {
+		switch {
+		case netw == "host":
+			config.HasPort = false
+			return nil, fmt.Errorf("SocketActivationPort ignored: Network=host does not support socket activation")
+		case netw == "none":
+			return fmt.Errorf("SocketActivationPort requires a network whose published port is reachable on the loopback where the proxy runs; Network=none unsupported"), nil
+		case strings.HasPrefix(netw, "container:"):
+			return fmt.Errorf("SocketActivationPort requires a network whose published port is reachable on the loopback where the proxy runs; Network=%s unsupported", netw), nil
+		}
+	}
+	return nil, nil
+}
+
+func buildListenStream(hostIP string, hostPort uint16) string {
+	hp := strconv.Itoa(int(hostPort))
+	switch {
+	case hostIP == "" || hostIP == "0.0.0.0" || hostIP == "::":
+		return hp
+	default:
+		ip := net.ParseIP(hostIP)
+		if ip != nil && ip.To4() == nil {
+			return "[" + hostIP + "]:" + hp
+		}
+		return hostIP + ":" + hp
+	}
+}
+
+func generateSAPUnits(config *socketActivationConfig, serviceName string, containerServiceFile string, isTemplate bool, isPod bool) ([]*parser.UnitFile, error) {
+	proxydPath, err := exec.LookPath("systemd-socket-proxyd")
+	if err != nil {
+		proxydPath = ""
+	}
+
+	bashPath, _ := exec.LookPath("bash")
+
+	socketName := serviceName + ".socket"
+	proxyName := serviceName + "-proxy.service"
+	if isTemplate {
+		proxyName = removeExtension(serviceName, "", "") + "-proxy@.service"
+	}
+
+	socketUnit := parser.NewUnitFile()
+	socketUnit.Filename = socketName
+
+	socketUnit.Add(UnitGroup, "Description", fmt.Sprintf("%s socket", serviceName))
+	socketUnit.Set("Socket", "Service", proxyName)
+	socketUnit.Set("Socket", "FileDescriptorName", "proxy")
+	socketUnit.Set("Socket", "ListenStream", buildListenStream(config.Port.HostIP, config.Port.HostPort))
+	socketUnit.Set("Socket", "Accept", "no")
+	socketUnit.Set("Socket", "MaxConnections", "64")
+	socketUnit.Set("Socket", "KeepAlive", "yes")
+	socketUnit.Set("Socket", "StartupRatePerSec", "10")
+	socketUnit.Add(InstallGroup, "WantedBy", "sockets.target")
+	if isTemplate {
+		socketUnit.Set(InstallGroup, "DefaultInstance", "1")
+	}
+
+	proxyUnit := parser.NewUnitFile()
+	proxyUnit.Filename = proxyName
+
+	proxyUnit.Add(UnitGroup, "Description", fmt.Sprintf("%s socket proxy", serviceName))
+	proxyUnit.Add(UnitGroup, "Requires", containerServiceFile)
+	proxyUnit.Add(UnitGroup, "After", containerServiceFile)
+	proxyUnit.Add(UnitGroup, "PartOf", containerServiceFile)
+
+	if bashPath != "" {
+		pollCmd := fmt.Sprintf("for i in $(seq 1 600); do exec 3<>/dev/tcp/127.0.0.1/%d && exit 0; sleep 0.2; done; exit 1", config.Port.InternalPort)
+		proxyUnit.AddCmdline(ServiceGroup, "ExecStartPre", []string{bashPath, "-c", pollCmd})
+	}
+
+	target := fmt.Sprintf("127.0.0.1:%d", config.Port.InternalPort)
+	if proxydPath != "" {
+		args := []string{proxydPath}
+		args = append(args, config.Options...)
+		args = append(args, target)
+		proxyUnit.AddCmdline(ServiceGroup, "ExecStart", args)
+	} else {
+		proxyUnit.AddCmdline(ServiceGroup, "ExecStart", []string{target})
+	}
+
+	proxyUnit.Set(ServiceGroup, "Type", "simple")
+	proxyUnit.Set(ServiceGroup, "Restart", "no")
+
+	proxyUnit.Set(ServiceGroup, "PrivateTmp", "yes")
+	proxyUnit.Set(ServiceGroup, "ProtectSystem", "strict")
+	proxyUnit.Set(ServiceGroup, "ProtectHome", "yes")
+	proxyUnit.Set(ServiceGroup, "NoNewPrivileges", "yes")
+	proxyUnit.Set(ServiceGroup, "ProtectKernelTunables", "yes")
+	proxyUnit.Set(ServiceGroup, "ProtectKernelModules", "yes")
+	proxyUnit.Set(ServiceGroup, "ProtectControlGroups", "yes")
+	proxyUnit.Set(ServiceGroup, "RestrictAddressFamilies", "AF_INET AF_INET6 AF_UNIX")
+	proxyUnit.Set(ServiceGroup, "LockPersonality", "yes")
+	proxyUnit.Set(ServiceGroup, "RestrictRealtime", "yes")
+	proxyUnit.Set(ServiceGroup, "PrivateDevices", "yes")
+	proxyUnit.Set(ServiceGroup, "RestrictSUIDSGID", "yes")
+	proxyUnit.Set(ServiceGroup, "SystemCallFilter", "@system-service")
+	proxyUnit.Set(ServiceGroup, "SystemCallErrorNumber", "EPERM")
+
+	return []*parser.UnitFile{socketUnit, proxyUnit}, nil
+}
+
 // Convert a quadlet container file (unit file with a Container group) to a systemd
 // service file (unit file with Service group) based on the options in the
 // Container group.
 // The original Container group is kept around as X-Container.
-func ConvertContainer(container *parser.UnitFile, unitsInfoMap map[string]*UnitInfo, isUser bool) (*parser.UnitFile, error, error) {
+func ConvertContainer(container *parser.UnitFile, unitsInfoMap map[string]*UnitInfo, isUser bool) (*parser.UnitFile, error, error, []*parser.UnitFile) {
 	var warn, warnings error
 
 	service, _, err := initServiceUnitFile(container, isUser, unitsInfoMap, ContainerGroup)
 	if err != nil {
-		return nil, warnings, err
+		return nil, warnings, err, nil
 	}
 
 	// One image or rootfs must be specified for the container
 	image, _ := container.Lookup(ContainerGroup, KeyImage)
 	rootfs, _ := container.Lookup(ContainerGroup, KeyRootfs)
 	if len(image) == 0 && len(rootfs) == 0 {
-		return nil, warnings, fmt.Errorf("no Image or Rootfs key specified")
+		return nil, warnings, fmt.Errorf("no Image or Rootfs key specified"), nil
 	}
 	if len(image) > 0 && len(rootfs) > 0 {
-		return nil, warnings, fmt.Errorf("the Image And Rootfs keys conflict can not be specified together")
+		return nil, warnings, fmt.Errorf("the Image And Rootfs keys conflict can not be specified together"), nil
 	}
 
 	if len(image) > 0 {
 		var err error
 		if image, err = handleImageSource(image, service, unitsInfoMap); err != nil {
-			return nil, warnings, err
+			return nil, warnings, err, nil
 		}
 	}
 
@@ -632,7 +874,7 @@ func ConvertContainer(container *parser.UnitFile, unitsInfoMap map[string]*UnitI
 	killMode, ok := service.Lookup(ServiceGroup, "KillMode")
 	if !ok || (killMode != "mixed" && killMode != "control-group") {
 		if ok {
-			return nil, warnings, fmt.Errorf("invalid KillMode '%s'", killMode)
+			return nil, warnings, fmt.Errorf("invalid KillMode '%s'", killMode), nil
 		}
 
 		// We default to mixed instead of control-group, because it lets conmon do its thing
@@ -652,7 +894,7 @@ func ConvertContainer(container *parser.UnitFile, unitsInfoMap map[string]*UnitI
 	warn, err = handleExecReload(container, service, ContainerGroup, containerName)
 	warnings = errors.Join(warnings, warn)
 	if err != nil {
-		return nil, warnings, err
+		return nil, warnings, err, nil
 	}
 
 	podman := createBasePodmanCommand(container, ContainerGroup)
@@ -727,12 +969,12 @@ func ConvertContainer(container *parser.UnitFile, unitsInfoMap map[string]*UnitI
 	lookupAndAddBoolean(container, ContainerGroup, boolKeys, podman)
 
 	if err := addNetworks(container, ContainerGroup, service, unitsInfoMap, podman); err != nil {
-		return nil, warnings, err
+		return nil, warnings, err, nil
 	}
 
 	serviceType, ok := service.Lookup(ServiceGroup, "Type")
 	if ok && serviceType != "notify" && serviceType != "oneshot" {
-		return nil, warnings, fmt.Errorf("invalid service Type '%s'", serviceType)
+		return nil, warnings, fmt.Errorf("invalid service Type '%s'", serviceType), nil
 	}
 
 	if serviceType != "oneshot" {
@@ -843,15 +1085,15 @@ func ConvertContainer(container *parser.UnitFile, unitsInfoMap map[string]*UnitI
 	}
 
 	if err := handleUser(container, ContainerGroup, podman); err != nil {
-		return nil, warnings, err
+		return nil, warnings, err, nil
 	}
 
 	if err := handleUserMappings(container, ContainerGroup, podman, true); err != nil {
-		return nil, warnings, err
+		return nil, warnings, err, nil
 	}
 
 	if err := addVolumes(container, service, ContainerGroup, unitsInfoMap, podman); err != nil {
-		return nil, warnings, err
+		return nil, warnings, err, nil
 	}
 
 	update, ok := container.Lookup(ContainerGroup, KeyAutoUpdate)
@@ -869,13 +1111,38 @@ func ConvertContainer(container *parser.UnitFile, unitsInfoMap map[string]*UnitI
 		exposedPort = strings.TrimSpace(exposedPort) // Allow whitespace after
 
 		if !isPortRange(exposedPort) {
-			return nil, warnings, fmt.Errorf("invalid port format '%s'", exposedPort)
+			return nil, warnings, fmt.Errorf("invalid port format '%s'", exposedPort), nil
 		}
 
 		podman.add("--expose", exposedPort)
 	}
 
 	handlePublishPorts(container, ContainerGroup, podman)
+
+	sapConfig, sapWarn, sapErr := resolveSocketActivationPort(container, ContainerGroup)
+	warnings = errors.Join(warnings, sapWarn)
+	if sapErr != nil {
+		return nil, warnings, sapErr, nil
+	}
+
+	sapNetErr, sapNetWarn := validateSAPNetworkMode(container, ContainerGroup, sapConfig)
+	warnings = errors.Join(warnings, sapNetWarn)
+	if sapNetErr != nil {
+		return nil, warnings, sapNetErr, nil
+	}
+
+	if sapConfig.HasPort {
+		if IsTemplateUnitFileName(container.Filename) && !container.HasKey(InstallGroup, "DefaultInstance") {
+			return nil, warnings, fmt.Errorf("SocketActivationPort on a template unit requires per-instance ports, which are not supported in v1 (use DefaultInstance=1 to enable a single instance, or a non-template unit)"), nil
+		}
+		if IsTemplateUnitFileName(container.Filename) {
+			warnings = errors.Join(warnings, fmt.Errorf("SocketActivationPort on a template unit with DefaultInstance=1: only the default instance is supported; other instances will collide on the same host port"))
+		}
+		podman.add("--publish", fmt.Sprintf("127.0.0.1:%d:%d", sapConfig.Port.InternalPort, sapConfig.Port.ContainerPort))
+		if !service.HasKey(ServiceGroup, "Restart") {
+			service.Set(ServiceGroup, "Restart", "on-failure")
+		}
+	}
 
 	keyValKeys := map[string]string{
 		KeyEnvironment: "--env",
@@ -899,7 +1166,7 @@ func ConvertContainer(container *parser.UnitFile, unitsInfoMap map[string]*UnitI
 	for _, envFile := range envFiles {
 		filePath, err := getAbsolutePath(container, envFile)
 		if err != nil {
-			return nil, warnings, err
+			return nil, warnings, err, nil
 		}
 		podman.add("--env-file", filePath)
 	}
@@ -913,7 +1180,7 @@ func ConvertContainer(container *parser.UnitFile, unitsInfoMap map[string]*UnitI
 	for _, mount := range mounts {
 		mountStr, err := resolveContainerMountParams(container, service, mount, unitsInfoMap)
 		if err != nil {
-			return nil, warnings, err
+			return nil, warnings, err, nil
 		}
 		podman.add("--mount", mountStr)
 	}
@@ -921,7 +1188,7 @@ func ConvertContainer(container *parser.UnitFile, unitsInfoMap map[string]*UnitI
 	handleHealth(container, ContainerGroup, podman)
 
 	if err := handlePod(container, service, ContainerGroup, unitsInfoMap, podman); err != nil {
-		return nil, warnings, err
+		return nil, warnings, err, nil
 	}
 
 	handlePodmanArgs(container, ContainerGroup, podman)
@@ -940,7 +1207,17 @@ func ConvertContainer(container *parser.UnitFile, unitsInfoMap map[string]*UnitI
 
 	service.AddCmdline(ServiceGroup, "ExecStart", podman.Args)
 
-	return service, warnings, nil
+	var extras []*parser.UnitFile
+	if sapConfig.HasPort {
+		baseName := removeExtension(service.Filename, "", "")
+		sapExtras, proxydErr := generateSAPUnits(sapConfig, baseName, service.Filename, IsTemplateUnitFileName(container.Filename), false)
+		if proxydErr != nil {
+			return nil, warnings, proxydErr, nil
+		}
+		extras = sapExtras
+	}
+
+	return service, warnings, nil, extras
 }
 
 // Determine if the given file name belongs to an uninstantiated template unit.
@@ -1603,12 +1880,12 @@ func GetPodResourceName(podUnit *parser.UnitFile) string {
 	return podName
 }
 
-func ConvertPod(podUnit *parser.UnitFile, unitsInfoMap map[string]*UnitInfo, isUser bool) (*parser.UnitFile, error, error) {
+func ConvertPod(podUnit *parser.UnitFile, unitsInfoMap map[string]*UnitInfo, isUser bool) (*parser.UnitFile, error, error, []*parser.UnitFile) {
 	var warn, warnings error
 
 	service, unitInfo, err := initServiceUnitFile(podUnit, isUser, unitsInfoMap, PodGroup)
 	if err != nil {
-		return nil, warnings, err
+		return nil, warnings, err, nil
 	}
 
 	podName := GetPodResourceName(podUnit)
@@ -1658,10 +1935,35 @@ func ConvertPod(podUnit *parser.UnitFile, unitsInfoMap map[string]*UnitInfo, isU
 	handleExitPolicy(podUnit, PodGroup, execStartPre)
 
 	if err := handleUserMappings(podUnit, PodGroup, execStartPre, true); err != nil {
-		return nil, warnings, err
+		return nil, warnings, err, nil
 	}
 
 	handlePublishPorts(podUnit, PodGroup, execStartPre)
+
+	podSapConfig, podSapWarn, podSapErr := resolveSocketActivationPort(podUnit, PodGroup)
+	warnings = errors.Join(warnings, podSapWarn)
+	if podSapErr != nil {
+		return nil, warnings, podSapErr, nil
+	}
+
+	podNetErr, podNetWarn := validateSAPNetworkMode(podUnit, PodGroup, podSapConfig)
+	warnings = errors.Join(warnings, podNetWarn)
+	if podNetErr != nil {
+		return nil, warnings, podNetErr, nil
+	}
+
+	if podSapConfig.HasPort {
+		if IsTemplateUnitFileName(podUnit.Filename) && !podUnit.HasKey(InstallGroup, "DefaultInstance") {
+			return nil, warnings, fmt.Errorf("SocketActivationPort on a template unit requires per-instance ports, which are not supported in v1 (use DefaultInstance=1 to enable a single instance, or a non-template unit)"), nil
+		}
+		if IsTemplateUnitFileName(podUnit.Filename) {
+			warnings = errors.Join(warnings, fmt.Errorf("SocketActivationPort on a template unit with DefaultInstance=1: only the default instance is supported; other instances will collide on the same host port"))
+		}
+		execStartPre.add("--publish", fmt.Sprintf("127.0.0.1:%d:%d", podSapConfig.Port.InternalPort, podSapConfig.Port.ContainerPort))
+		if !podUnit.HasKey(ServiceGroup, "Restart") {
+			service.Set(ServiceGroup, "Restart", "on-failure")
+		}
+	}
 
 	keyValKeys := map[string]string{
 		KeyLabel: "--label",
@@ -1670,7 +1972,7 @@ func ConvertPod(podUnit *parser.UnitFile, unitsInfoMap map[string]*UnitInfo, isU
 	warnings = errors.Join(warnings, warn)
 
 	if err := addNetworks(podUnit, PodGroup, service, unitsInfoMap, execStartPre); err != nil {
-		return nil, warnings, err
+		return nil, warnings, err, nil
 	}
 
 	stringsKeys := map[string]string{
@@ -1691,7 +1993,7 @@ func ConvertPod(podUnit *parser.UnitFile, unitsInfoMap map[string]*UnitInfo, isU
 	lookupAndAddAllStrings(podUnit, PodGroup, allStringsKeys, execStartPre)
 
 	if err := addVolumes(podUnit, service, PodGroup, unitsInfoMap, execStartPre); err != nil {
-		return nil, warnings, err
+		return nil, warnings, err, nil
 	}
 
 	execStartPre.add("--infra-name", fmt.Sprintf("%s-infra", podName))
@@ -1713,7 +2015,17 @@ func ConvertPod(podUnit *parser.UnitFile, unitsInfoMap map[string]*UnitInfo, isU
 		service.Set(ServiceGroup, "Restart", "on-failure")
 	}
 
-	return service, warnings, nil
+	var podExtras []*parser.UnitFile
+	if podSapConfig.HasPort {
+		podBaseName := removeExtension(service.Filename, "", "")
+		podSapExtras, podProxydErr := generateSAPUnits(podSapConfig, podBaseName, service.Filename, IsTemplateUnitFileName(podUnit.Filename), true)
+		if podProxydErr != nil {
+			return nil, warnings, podProxydErr, nil
+		}
+		podExtras = podSapExtras
+	}
+
+	return service, warnings, nil, podExtras
 }
 
 func handleUser(unitFile *parser.UnitFile, groupName string, podman *PodmanCmdline) error {
