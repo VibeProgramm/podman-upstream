@@ -634,6 +634,10 @@ func resolveSocketActivationPort(unitFile *parser.UnitFile, groupName string) (*
 	config := &socketActivationConfig{HasPort: true}
 	config.Port.RawSpec = sapEntries[0]
 
+	if strings.Contains(config.Port.RawSpec, "%i") || strings.Contains(config.Port.RawSpec, "%p") || strings.Contains(config.Port.RawSpec, "%N") || strings.Contains(config.Port.RawSpec, "%j") {
+		return nil, warnings, fmt.Errorf("SocketActivationPort does not support systemd specifiers in port numbers")
+	}
+
 	portMappings, err := specgenutil.CreatePortBindings([]string{config.Port.RawSpec})
 	if err != nil {
 		return nil, warnings, fmt.Errorf("SocketActivationPort: %w", err)
@@ -652,15 +656,11 @@ func resolveSocketActivationPort(unitFile *parser.UnitFile, groupName string) (*
 	if pm.ContainerPort == 0 {
 		return nil, warnings, fmt.Errorf("must provide a non-empty container port to publish")
 	}
-	if strings.Contains(config.Port.RawSpec, "%") {
-		return nil, warnings, fmt.Errorf("SocketActivationPort does not support systemd specifiers in port numbers")
-	}
 
 	config.Port.PortMapping = pm
 	config.Port.Protocol = "tcp"
 
 	usedPorts := make(map[int]bool)
-	usedPorts[int(pm.HostPort)] = true
 
 	ppPorts, _ := specgenutil.CreatePortBindings(unitFile.LookupAll(groupName, KeyPublishPort))
 	for _, p := range ppPorts {
@@ -709,6 +709,8 @@ func resolveSocketActivationPort(unitFile *parser.UnitFile, groupName string) (*
 	if config.Port.InternalPort == int(pm.HostPort) {
 		return nil, warnings, fmt.Errorf("SocketActivationPort host port %d equals internal port %d, which would create a proxy self-loop", pm.HostPort, config.Port.InternalPort)
 	}
+
+	usedPorts[int(pm.HostPort)] = true
 
 	for usedPorts[config.Port.InternalPort] {
 		config.Port.InternalPort++
@@ -814,7 +816,9 @@ func generateSAPUnits(config *socketActivationConfig, serviceName string, contai
 		args = append(args, target)
 		proxyUnit.AddCmdline(ServiceGroup, "ExecStart", args)
 	} else {
-		proxyUnit.AddCmdline(ServiceGroup, "ExecStart", []string{target})
+		args := config.Options
+		args = append(args, target)
+		proxyUnit.AddCmdline(ServiceGroup, "ExecStart", args)
 	}
 
 	proxyUnit.Set(ServiceGroup, "Type", "simple")
