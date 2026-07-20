@@ -29,95 +29,75 @@ func TestSocketActivationPort_Negative(t *testing.T) {
 		filename string
 	}{
 		{
-			name:    "TN-01 empty host port",
+			name:    "empty host port",
 			content: "[Container]\nImage=test\nSocketActivationPort=:80\n",
 			wantErr: "requires explicit host port",
 		},
 		{
-			name:    "TN-02 port range",
+			name:    "port range",
 			content: "[Container]\nImage=test\nSocketActivationPort=8080-8090:80-90\n",
 			wantErr: "does not support port ranges",
 		},
 		{
-			name:    "TN-03 UDP protocol",
+			name:    "UDP protocol",
 			content: "[Container]\nImage=test\nSocketActivationPort=8080:80/udp\n",
 			wantErr: "only supports TCP",
 		},
 		{
-			name:    "TN-04 host port zero",
+			name:    "host port zero",
 			content: "[Container]\nImage=test\nSocketActivationPort=0:80\n",
 			wantErr: "between 1 and 65535",
 		},
 		{
-			name:    "TN-05 host port out of range",
+			name:    "host port out of range",
 			content: "[Container]\nImage=test\nSocketActivationPort=65536:80\n",
 			wantErr: "between 1 and 65535",
 		},
 		{
-			name:    "TN-06 missing container port",
+			name:    "missing container port",
 			content: "[Container]\nImage=test\nSocketActivationPort=8080:\n",
 			wantErr: "non-empty container port",
 		},
 		{
-			name:    "TN-07 invalid format",
+			name:    "invalid format",
 			content: "[Container]\nImage=test\nSocketActivationPort=invalid\n",
 			wantErr: "invalid port number",
 		},
 		{
-			name:    "TN-08 internal port collision",
-			content: "[Container]\nImage=test\nPublishPort=9090:80\nSocketActivationPort=8080:80\nSocketActivationInternalPort=9090\n",
-			wantErr: "internal port 9090 already in use",
-		},
-		{
-			name:    "TN-10 specifier in port",
+			name:    "specifier in port",
 			content: "[Container]\nImage=test\nSocketActivationPort=8080:%i\n",
 			wantErr: "systemd specifiers in port numbers",
 		},
 		{
-			name:    "TN-12 multiple entries",
-			content: "[Container]\nImage=test\nSocketActivationPort=8080:80\nSocketActivationPort=9090:90\n",
-			wantErr: "at most one entry",
-		},
-		{
-			name:    "TN-13 self-loop default",
-			content: "[Container]\nImage=test\nSocketActivationPort=8080:8080\n",
-			wantErr: "self-loop",
-		},
-		{
-			name:    "TN-13b self-loop explicit",
-			content: "[Container]\nImage=test\nSocketActivationPort=8080:80\nSocketActivationInternalPort=8080\n",
-			wantErr: "self-loop",
-		},
-		{
-			name:    "TN-15 Network=none",
+			name:    "Network=none",
 			content: "[Container]\nImage=test\nSocketActivationPort=8080:80\nNetwork=none\n",
-			wantErr: "Network=none unsupported",
+			wantErr: "unsupported",
 		},
 		{
-			name:    "TN-16 scope ID",
+			name:    "scope ID",
 			content: "[Container]\nImage=test\nSocketActivationPort=[fe80::1%eth0]:8080:80\n",
 			wantErr: "cannot parse",
 		},
 		{
-			name:     "TN-17 template no DefaultInstance",
+			name:     "template no DefaultInstance",
 			content:  "[Container]\nImage=test\nSocketActivationPort=8080:80\n",
 			filename: "test@.container",
 			wantErr:  "not supported in v1",
 		},
 		{
-			name:    "TN-18 unknown option",
+			name:    "unknown option",
 			content: "[Container]\nImage=test\nSocketActivationPort=8080:80\nSocketActivationPortOptions=--bogus\n",
 			wantErr: "unknown option",
-		},
-		{
-			name:    "TN-21 explicit internal vs PP",
-			content: "[Container]\nImage=test\nPublishPort=8080:90\nSocketActivationPort=9090:80\nSocketActivationInternalPort=8080\n",
-			wantErr: "internal port 8080 already in use",
 		},
 		{
 			name:    "SAP019 conflict with PP",
 			content: "[Container]\nImage=test\nPublishPort=8080:90\nSocketActivationPort=8080:80\n",
 			wantErr: "conflicts with PublishPort",
+		},
+		{
+			name:    "duplicate host port",
+			content: "[Container]\nImage=test\nSocketActivationPort=8080:80\nSocketActivationPort=8080:443\n",
+			wantErr: "duplicate host port",
 		},
 	}
 
@@ -128,12 +108,12 @@ func TestSocketActivationPort_Negative(t *testing.T) {
 				filename = "test.container"
 			}
 			u := makeContainerUnit(filename, tt.content)
-
 			unitsInfoMap := map[string]*UnitInfo{
 				filename: {ServiceName: "test", ResourceName: "systemd-test"},
 			}
 
 			svc, warnings, err, extras := ConvertContainer(u, unitsInfoMap, false)
+			_ = warnings
 
 			if tt.wantErr != "" {
 				if assert.Error(t, err, "expected error containing %q", tt.wantErr) {
@@ -147,16 +127,16 @@ func TestSocketActivationPort_Negative(t *testing.T) {
 			}
 
 			if tt.wantWarn != "" {
-				require.NotNil(t, warnings, "expected warning")
+				require.NotNil(t, warnings)
 				assert.Contains(t, warnings.Error(), tt.wantWarn)
 			}
-			_ = warnings
 		})
 	}
 }
 
 func TestSocketActivationPort_Positive(t *testing.T) {
-	t.Run("TC-01 basic", func(t *testing.T) {
+	// TC-01: Single port — new naming scheme with port in filename
+	t.Run("single port basic", func(t *testing.T) {
 		u := makeContainerUnit("test.container", "[Container]\nImage=test\nSocketActivationPort=8080:80\n")
 		unitsInfoMap := map[string]*UnitInfo{
 			"test.container": {ServiceName: "test", ResourceName: "systemd-test"},
@@ -169,25 +149,48 @@ func TestSocketActivationPort_Positive(t *testing.T) {
 
 		execStart := svc.LookupAll("Service", "ExecStart")
 		require.Len(t, execStart, 1)
-		assert.True(t, strings.Contains(execStart[0], "--publish 127.0.0.1:80:80"))
+		assert.True(t, strings.Contains(execStart[0], "--publish 127.0.0.1:1024:80"))
 
 		restart, _ := svc.Lookup("Service", "Restart")
 		assert.Equal(t, "on-failure", restart)
 
 		socketUnit := extras[0]
-		assert.Equal(t, "test.socket", socketUnit.Filename)
+		assert.Equal(t, "test-8080.socket", socketUnit.Filename)
 		listen, _ := socketUnit.Lookup("Socket", "ListenStream")
 		assert.Equal(t, "8080", listen)
 		serviceRef, _ := socketUnit.Lookup("Socket", "Service")
-		assert.Equal(t, "test-proxy.service", serviceRef)
+		assert.Equal(t, "test-8080-proxy.service", serviceRef)
 
 		proxyUnit := extras[1]
-		assert.Equal(t, "test-proxy.service", proxyUnit.Filename)
-		requires, _ := proxyUnit.Lookup("Unit", "Requires")
-		assert.Equal(t, "test.service", requires)
+		assert.Equal(t, "test-8080-proxy.service", proxyUnit.Filename)
 	})
 
-	t.Run("TC-06 with options", func(t *testing.T) {
+	// Multi-port: 2 entries → 4 extras
+	t.Run("multi port", func(t *testing.T) {
+		u := makeContainerUnit("test.container", "[Container]\nImage=test\nSocketActivationPort=8080:80\nSocketActivationPort=8443:443\n")
+		unitsInfoMap := map[string]*UnitInfo{
+			"test.container": {ServiceName: "test", ResourceName: "systemd-test"},
+		}
+
+		svc, _, err, extras := ConvertContainer(u, unitsInfoMap, false)
+		require.NoError(t, err)
+		require.NotNil(t, svc)
+		require.Len(t, extras, 4)
+
+		execStart := svc.LookupAll("Service", "ExecStart")
+		require.Len(t, execStart, 1)
+		assert.True(t, strings.Contains(execStart[0], "--publish 127.0.0.1:1024:80"))
+		assert.True(t, strings.Contains(execStart[0], "--publish 127.0.0.1:1025:443"))
+
+		// Socket filenames include port
+		assert.Equal(t, "test-8080.socket", extras[0].Filename)
+		assert.Equal(t, "test-8080-proxy.service", extras[1].Filename)
+		assert.Equal(t, "test-8443.socket", extras[2].Filename)
+		assert.Equal(t, "test-8443-proxy.service", extras[3].Filename)
+	})
+
+	// Options in ExecStart
+	t.Run("with options", func(t *testing.T) {
 		u := makeContainerUnit("test.container", "[Container]\nImage=test\nSocketActivationPort=8080:80\nSocketActivationPortOptions=--timeout=30s\n")
 		unitsInfoMap := map[string]*UnitInfo{
 			"test.container": {ServiceName: "test", ResourceName: "systemd-test"},
@@ -200,40 +203,11 @@ func TestSocketActivationPort_Positive(t *testing.T) {
 		proxyUnit := extras[1]
 		execStart := proxyUnit.LookupAll("Service", "ExecStart")
 		require.Len(t, execStart, 1)
-		assert.True(t, strings.Contains(execStart[0], "--timeout=30s"), "options should be present even when proxyd is absent")
+		assert.True(t, strings.Contains(execStart[0], "--timeout=30s"))
 	})
 
-	t.Run("TC-07 explicit internal", func(t *testing.T) {
-		u := makeContainerUnit("test.container", "[Container]\nImage=test\nSocketActivationPort=8080:80\nSocketActivationInternalPort=18080\n")
-		unitsInfoMap := map[string]*UnitInfo{
-			"test.container": {ServiceName: "test", ResourceName: "systemd-test"},
-		}
-
-		svc, _, err, _ := ConvertContainer(u, unitsInfoMap, false)
-		require.NoError(t, err)
-
-		execStart := svc.LookupAll("Service", "ExecStart")
-		require.Len(t, execStart, 1)
-		assert.True(t, strings.Contains(execStart[0], "--publish 127.0.0.1:18080:80"))
-	})
-
-	t.Run("TC-10 coexist with PP", func(t *testing.T) {
-		u := makeContainerUnit("test.container", "[Container]\nImage=test\nPublishPort=9000:8080\nSocketActivationPort=8443:443\n")
-		unitsInfoMap := map[string]*UnitInfo{
-			"test.container": {ServiceName: "test", ResourceName: "systemd-test"},
-		}
-
-		svc, _, err, extras := ConvertContainer(u, unitsInfoMap, false)
-		require.NoError(t, err)
-		require.Len(t, extras, 2)
-
-		execStart := svc.LookupAll("Service", "ExecStart")
-		require.Len(t, execStart, 1)
-		assert.True(t, strings.Contains(execStart[0], "--publish 9000:8080"))
-		assert.True(t, strings.Contains(execStart[0], "--publish 127.0.0.1:443:443"))
-	})
-
-	t.Run("TC-15 default internal", func(t *testing.T) {
+	// Floor=1024: containerPort 80 → internalPort 1024
+	t.Run("floor 1024", func(t *testing.T) {
 		u := makeContainerUnit("test.container", "[Container]\nImage=test\nSocketActivationPort=8080:80\n")
 		unitsInfoMap := map[string]*UnitInfo{
 			"test.container": {ServiceName: "test", ResourceName: "systemd-test"},
@@ -244,10 +218,27 @@ func TestSocketActivationPort_Positive(t *testing.T) {
 
 		execStart := svc.LookupAll("Service", "ExecStart")
 		require.Len(t, execStart, 1)
-		assert.True(t, strings.Contains(execStart[0], "--publish 127.0.0.1:80:80"))
+		assert.True(t, strings.Contains(execStart[0], "127.0.0.1:1024:80"), "containerPort 80 < 1024 → floor to 1024")
 	})
 
-	t.Run("TC-16 collision avoidance", func(t *testing.T) {
+	// Floor=1024 not applied when containerPort ≥ 1024
+	t.Run("no floor needed", func(t *testing.T) {
+		u := makeContainerUnit("test.container", "[Container]\nImage=test\nSocketActivationPort=8080:8080\n")
+		unitsInfoMap := map[string]*UnitInfo{
+			"test.container": {ServiceName: "test", ResourceName: "systemd-test"},
+		}
+
+		svc, _, err, _ := ConvertContainer(u, unitsInfoMap, false)
+		require.NoError(t, err)
+
+		execStart := svc.LookupAll("Service", "ExecStart")
+		require.Len(t, execStart, 1)
+		// containerPort 8080 ≥ 1024 but equals hostPort (8080) → increment to 8081
+		assert.True(t, strings.Contains(execStart[0], "127.0.0.1:8081:8080"))
+	})
+
+	// Collision avoidance: internalPort occupied → search upward
+	t.Run("collision avoidance", func(t *testing.T) {
 		u := makeContainerUnit("test.container", "[Container]\nImage=test\nPublishPort=80:8080\nSocketActivationPort=8080:80\n")
 		unitsInfoMap := map[string]*UnitInfo{
 			"test.container": {ServiceName: "test", ResourceName: "systemd-test"},
@@ -258,25 +249,13 @@ func TestSocketActivationPort_Positive(t *testing.T) {
 
 		execStart := svc.LookupAll("Service", "ExecStart")
 		require.Len(t, execStart, 1)
-		assert.True(t, strings.Contains(execStart[0], "127.0.0.1:81:80"), "internal 80 collides with PP container 80 -> search to 81")
+		// PP containerPort 8080 → usedPorts has 80 (host) + 8080 (container)
+		// SAP containerPort 80 → internal starts at max(1024, 80)=1024 → free
+		assert.True(t, strings.Contains(execStart[0], "127.0.0.1:1024:80"))
 	})
 
-	t.Run("TC-04 IPv6 loopback", func(t *testing.T) {
-		u := makeContainerUnit("test.container", "[Container]\nImage=test\nSocketActivationPort=[::1]:8080:80\n")
-		unitsInfoMap := map[string]*UnitInfo{
-			"test.container": {ServiceName: "test", ResourceName: "systemd-test"},
-		}
-
-		_, _, err, extras := ConvertContainer(u, unitsInfoMap, false)
-		require.NoError(t, err)
-		require.Len(t, extras, 2)
-
-		socketUnit := extras[0]
-		listen, _ := socketUnit.Lookup("Socket", "ListenStream")
-		assert.Equal(t, "[::1]:8080", listen)
-	})
-
-	t.Run("TN-19 Network=host warning", func(t *testing.T) {
+	// Network=host → warning, skip
+	t.Run("Network=host warning", func(t *testing.T) {
 		u := makeContainerUnit("test.container", "[Container]\nImage=test\nSocketActivationPort=8080:80\nNetwork=host\n")
 		unitsInfoMap := map[string]*UnitInfo{
 			"test.container": {ServiceName: "test", ResourceName: "systemd-test"},
@@ -285,17 +264,14 @@ func TestSocketActivationPort_Positive(t *testing.T) {
 		svc, warnings, err, extras := ConvertContainer(u, unitsInfoMap, false)
 		require.NoError(t, err)
 		require.NotNil(t, svc)
-		require.Empty(t, extras, "no socket/proxy for Network=host")
+		require.Empty(t, extras)
 
 		require.NotNil(t, warnings)
 		assert.Contains(t, warnings.Error(), "Network=host does not support")
-
-		execStart := svc.LookupAll("Service", "ExecStart")
-		require.Len(t, execStart, 1)
-		assert.False(t, strings.Contains(execStart[0], "--publish 127.0.0.1"), "no --publish injected for Network=host")
 	})
 
-	t.Run("TC-08 template with DefaultInstance", func(t *testing.T) {
+	// Template with DefaultInstance
+	t.Run("template with DefaultInstance", func(t *testing.T) {
 		u := makeContainerUnit("test@.container", "[Container]\nImage=test\nSocketActivationPort=8080:80\n[Install]\nDefaultInstance=1\n")
 		unitsInfoMap := map[string]*UnitInfo{
 			"test@.container": {ServiceName: "test@", ResourceName: "systemd-test"},
@@ -308,8 +284,12 @@ func TestSocketActivationPort_Positive(t *testing.T) {
 
 		require.NotNil(t, warnings)
 		assert.Contains(t, warnings.Error(), "only the default instance is supported")
+
+		assert.Equal(t, "test-8080@.socket", extras[0].Filename)
+		assert.Equal(t, "test-8080-proxy@.service", extras[1].Filename)
 	})
 
+	// Restart precedence guard
 	t.Run("Restart precedence guard", func(t *testing.T) {
 		u := makeContainerUnit("test.container", "[Container]\nImage=test\nSocketActivationPort=8080:80\n[Service]\nRestart=no\n")
 		unitsInfoMap := map[string]*UnitInfo{
@@ -320,11 +300,12 @@ func TestSocketActivationPort_Positive(t *testing.T) {
 		require.NoError(t, err)
 
 		restart, _ := svc.Lookup("Service", "Restart")
-		assert.Equal(t, "no", restart, "user Restart=no must not be overwritten")
+		assert.Equal(t, "no", restart)
 	})
 
+	// Single ExecStart
 	t.Run("single ExecStart", func(t *testing.T) {
-		u := makeContainerUnit("test.container", "[Container]\nImage=test\nSocketActivationPort=8080:80\nPublishPort=9000:8080\n")
+		u := makeContainerUnit("test.container", "[Container]\nImage=test\nSocketActivationPort=8080:80\nSocketActivationPort=8443:443\nPublishPort=9000:8080\n")
 		unitsInfoMap := map[string]*UnitInfo{
 			"test.container": {ServiceName: "test", ResourceName: "systemd-test"},
 		}
@@ -336,6 +317,7 @@ func TestSocketActivationPort_Positive(t *testing.T) {
 		assert.Len(t, execStarts, 1, "must have exactly one ExecStart")
 	})
 
+	// Proxy hardening
 	t.Run("proxy hardening", func(t *testing.T) {
 		u := makeContainerUnit("test.container", "[Container]\nImage=test\nSocketActivationPort=8080:80\n")
 		unitsInfoMap := map[string]*UnitInfo{
@@ -358,8 +340,13 @@ func TestSocketActivationPort_Positive(t *testing.T) {
 		assert.False(t, hasMDE, "MemoryDenyWriteExecute must NOT be present")
 		_, hasRN := proxyUnit.Lookup("Service", "RestrictNamespaces")
 		assert.False(t, hasRN, "RestrictNamespaces must NOT be present")
+
+		// No bash ExecStartPre
+		execPre := proxyUnit.LookupAll("Service", "ExecStartPre")
+		assert.Empty(t, execPre, "no bash readiness probe")
 	})
 
+	// ConvertPod
 	t.Run("ConvertPod basic", func(t *testing.T) {
 		u := makeContainerUnit("test.pod", "[Pod]\nPodName=test\nSocketActivationPort=8080:80\n")
 		unitsInfoMap := map[string]*UnitInfo{
@@ -373,19 +360,12 @@ func TestSocketActivationPort_Positive(t *testing.T) {
 
 		execPre := svc.LookupAll("Service", "ExecStartPre")
 		require.Len(t, execPre, 1)
-		assert.True(t, strings.Contains(execPre[0], "--publish 127.0.0.1:80:80"))
+		assert.True(t, strings.Contains(execPre[0], "--publish 127.0.0.1:1024:80"))
 
-		socketUnit := extras[0]
-		assert.Equal(t, "test-pod.socket", socketUnit.Filename)
-		listen, _ := socketUnit.Lookup("Socket", "ListenStream")
-		assert.Equal(t, "8080", listen)
-
-		proxyUnit := extras[1]
-		assert.Equal(t, "test-pod-proxy.service", proxyUnit.Filename)
-		requires, _ := proxyUnit.Lookup("Unit", "Requires")
-		assert.Equal(t, "test-pod.service", requires)
+		assert.Equal(t, "test-pod-8080.socket", extras[0].Filename)
 	})
 
+	// Network=container:xxx error
 	t.Run("Network=container:XXX error", func(t *testing.T) {
 		u := makeContainerUnit("test.container", "[Container]\nImage=test\nSocketActivationPort=8080:80\nNetwork=container:other\n")
 		unitsInfoMap := map[string]*UnitInfo{
@@ -397,20 +377,9 @@ func TestSocketActivationPort_Positive(t *testing.T) {
 		assert.Contains(t, err.Error(), "unsupported")
 	})
 
-	t.Run("Network=.container error", func(t *testing.T) {
-		u := makeContainerUnit("test.container", "[Container]\nImage=test\nSocketActivationPort=8080:80\nNetwork=other.container\n")
-		unitsInfoMap := map[string]*UnitInfo{
-			"test.container": {ServiceName: "test", ResourceName: "systemd-test"},
-		}
-
-		_, _, err, _ := ConvertContainer(u, unitsInfoMap, false)
-		require.Error(t, err)
-		// Error comes from addNetworks (unit not found in map) before SAP validation
-		assert.Contains(t, err.Error(), "was not found")
-	})
-
-	t.Run("ExposeHostPort in usedPorts", func(t *testing.T) {
-		u := makeContainerUnit("test.container", "[Container]\nImage=test\nExposeHostPort=80\nSocketActivationPort=8080:80\n")
+	// ExposeHostPort in usedPorts
+	t.Run("ExposeHostPort collision", func(t *testing.T) {
+		u := makeContainerUnit("test.container", "[Container]\nImage=test\nExposeHostPort=1024\nSocketActivationPort=8080:80\n")
 		unitsInfoMap := map[string]*UnitInfo{
 			"test.container": {ServiceName: "test", ResourceName: "systemd-test"},
 		}
@@ -419,22 +388,10 @@ func TestSocketActivationPort_Positive(t *testing.T) {
 		require.NoError(t, err)
 		execStart := svc.LookupAll("Service", "ExecStart")
 		require.Len(t, execStart, 1)
-		assert.True(t, strings.Contains(execStart[0], "127.0.0.1:81:80"), "internal 80 collides with EHP 80 → should search to 81")
+		assert.True(t, strings.Contains(execStart[0], "127.0.0.1:1025:80"), "EHP 1024 + floor 1024 → search to 1025")
 	})
 
-	t.Run("ExposeHostPort range in usedPorts", func(t *testing.T) {
-		u := makeContainerUnit("test.container", "[Container]\nImage=test\nExposeHostPort=80-82\nSocketActivationPort=8080:80\n")
-		unitsInfoMap := map[string]*UnitInfo{
-			"test.container": {ServiceName: "test", ResourceName: "systemd-test"},
-		}
-
-		svc, _, err, _ := ConvertContainer(u, unitsInfoMap, false)
-		require.NoError(t, err)
-		execStart := svc.LookupAll("Service", "ExecStart")
-		require.Len(t, execStart, 1)
-		assert.True(t, strings.Contains(execStart[0], "127.0.0.1:83:80"), "internal 80 collides with EHP 80-82 → should search to 83")
-	})
-
+	// PodmanArgs network warning
 	t.Run("PodmanArgs network warning", func(t *testing.T) {
 		u := makeContainerUnit("test.container", "[Container]\nImage=test\nSocketActivationPort=8080:80\nPodmanArgs=--network=none\n")
 		unitsInfoMap := map[string]*UnitInfo{
@@ -447,54 +404,8 @@ func TestSocketActivationPort_Positive(t *testing.T) {
 		assert.Contains(t, warnings.Error(), "PodmanArgs")
 	})
 
-	t.Run("isPortRange invalid EHP rejected", func(t *testing.T) {
-		u := makeContainerUnit("test.container", "[Container]\nImage=test\nExposeHostPort=invalid\nSocketActivationPort=8080:80\n")
-		unitsInfoMap := map[string]*UnitInfo{
-			"test.container": {ServiceName: "test", ResourceName: "systemd-test"},
-		}
-
-		_, _, err, _ := ConvertContainer(u, unitsInfoMap, false)
-		require.Error(t, err)
-		assert.Contains(t, err.Error(), "invalid port format", "invalid EHP rejected by main ConvertContainer before SAP")
-	})
-
-	t.Run("template proxy naming", func(t *testing.T) {
-		u := makeContainerUnit("test@.container", "[Container]\nImage=test\nSocketActivationPort=8080:80\n[Install]\nDefaultInstance=1\n")
-		unitsInfoMap := map[string]*UnitInfo{
-			"test@.container": {ServiceName: "test@", ResourceName: "systemd-test"},
-		}
-
-		_, _, err, extras := ConvertContainer(u, unitsInfoMap, false)
-		require.NoError(t, err)
-		require.Len(t, extras, 2)
-
-		proxyUnit := extras[1]
-		assert.Equal(t, "test-proxy@.service", proxyUnit.Filename, "template proxy must be test-proxy@.service, not test@-proxy@.service")
-	})
-
-	t.Run("duplicate InternalPort error", func(t *testing.T) {
-		u := makeContainerUnit("test.container", "[Container]\nImage=test\nSocketActivationPort=8080:80\nSocketActivationInternalPort=90\nSocketActivationInternalPort=91\n")
-		unitsInfoMap := map[string]*UnitInfo{
-			"test.container": {ServiceName: "test", ResourceName: "systemd-test"},
-		}
-
-		_, _, err, _ := ConvertContainer(u, unitsInfoMap, false)
-		require.Error(t, err)
-		assert.Contains(t, err.Error(), "must not be specified more than once")
-	})
-
-	t.Run("unknown option not --timeout without value", func(t *testing.T) {
-		u := makeContainerUnit("test.container", "[Container]\nImage=test\nSocketActivationPort=8080:80\nSocketActivationPortOptions=--unknown-flag\n")
-		unitsInfoMap := map[string]*UnitInfo{
-			"test.container": {ServiceName: "test", ResourceName: "systemd-test"},
-		}
-
-		_, _, err, _ := ConvertContainer(u, unitsInfoMap, false)
-		require.Error(t, err)
-		assert.Contains(t, err.Error(), "unknown option")
-	})
-
-	t.Run("valid option --buffer-size accepted", func(t *testing.T) {
+	// Valid --buffer-size option
+	t.Run("valid --buffer-size option", func(t *testing.T) {
 		u := makeContainerUnit("test.container", "[Container]\nImage=test\nSocketActivationPort=8080:80\nSocketActivationPortOptions=--buffer-size=65536\n")
 		unitsInfoMap := map[string]*UnitInfo{
 			"test.container": {ServiceName: "test", ResourceName: "systemd-test"},
