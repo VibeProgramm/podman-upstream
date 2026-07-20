@@ -177,6 +177,9 @@ const (
 	KeyServiceName           = "ServiceName"
 	KeySetWorkingDirectory   = "SetWorkingDirectory"
 	KeyShmSize               = "ShmSize"
+	KeySocketActivationPort          = "SocketActivationPort"
+	KeySocketActivationPortOptions   = "SocketActivationPortOptions"
+	KeySocketActivationInternalPort  = "SocketActivationInternalPort"
 	KeyStartWithPod          = "StartWithPod"
 	KeyStopSignal            = "StopSignal"
 	KeyStopTimeout           = "StopTimeout"
@@ -201,10 +204,6 @@ const (
 	KeyVolumeName            = "VolumeName"
 	KeyWorkingDir            = "WorkingDir"
 	KeyYaml                  = "Yaml"
-
-	KeySocketActivationPort          = "SocketActivationPort"
-	KeySocketActivationPortOptions   = "SocketActivationPortOptions"
-	KeySocketActivationInternalPort  = "SocketActivationInternalPort"
 )
 
 // Unsupported keys in the Service group. Defined here so we can error when they are found
@@ -762,10 +761,13 @@ func buildListenStream(hostIP string, hostPort uint16) string {
 	}
 }
 
-func generateSAPUnits(config *socketActivationConfig, serviceName string, containerServiceFile string, isTemplate bool, isPod bool) ([]*parser.UnitFile, error) {
+func generateSAPUnits(config *socketActivationConfig, serviceName string, containerServiceFile string, isTemplate bool, isPod bool) ([]*parser.UnitFile, error, error) {
+	var warnings error
+
 	proxydPath, err := exec.LookPath("systemd-socket-proxyd")
 	if err != nil {
 		proxydPath = ""
+		warnings = errors.Join(warnings, fmt.Errorf("systemd-socket-proxyd not found in PATH"))
 	}
 
 	bashPath, _ := exec.LookPath("bash")
@@ -833,7 +835,7 @@ func generateSAPUnits(config *socketActivationConfig, serviceName string, contai
 	proxyUnit.Set(ServiceGroup, "SystemCallFilter", "@system-service")
 	proxyUnit.Set(ServiceGroup, "SystemCallErrorNumber", "EPERM")
 
-	return []*parser.UnitFile{socketUnit, proxyUnit}, nil
+	return []*parser.UnitFile{socketUnit, proxyUnit}, warnings, nil
 }
 
 // Convert a quadlet container file (unit file with a Container group) to a systemd
@@ -1210,7 +1212,8 @@ func ConvertContainer(container *parser.UnitFile, unitsInfoMap map[string]*UnitI
 	var extras []*parser.UnitFile
 	if sapConfig.HasPort {
 		baseName := removeExtension(service.Filename, "", "")
-		sapExtras, proxydErr := generateSAPUnits(sapConfig, baseName, service.Filename, IsTemplateUnitFileName(container.Filename), false)
+		sapExtras, proxydWarn, proxydErr := generateSAPUnits(sapConfig, baseName, service.Filename, IsTemplateUnitFileName(container.Filename), false)
+		warnings = errors.Join(warnings, proxydWarn)
 		if proxydErr != nil {
 			return nil, warnings, proxydErr, nil
 		}
@@ -2018,7 +2021,8 @@ func ConvertPod(podUnit *parser.UnitFile, unitsInfoMap map[string]*UnitInfo, isU
 	var podExtras []*parser.UnitFile
 	if podSapConfig.HasPort {
 		podBaseName := removeExtension(service.Filename, "", "")
-		podSapExtras, podProxydErr := generateSAPUnits(podSapConfig, podBaseName, service.Filename, IsTemplateUnitFileName(podUnit.Filename), true)
+		podSapExtras, podProxydWarn, podProxydErr := generateSAPUnits(podSapConfig, podBaseName, service.Filename, IsTemplateUnitFileName(podUnit.Filename), true)
+		warnings = errors.Join(warnings, podProxydWarn)
 		if podProxydErr != nil {
 			return nil, warnings, podProxydErr, nil
 		}
