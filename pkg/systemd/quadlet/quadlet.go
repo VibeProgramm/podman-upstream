@@ -675,6 +675,9 @@ func resolveSocketActivationPort(unitFile *parser.UnitFile, groupName string) (*
 
 	for _, ep := range unitFile.LookupAll(groupName, KeyExposeHostPort) {
 		ep = strings.TrimSpace(ep)
+		if !isPortRange(ep) {
+			continue
+		}
 		portStr, _, _ := strings.Cut(ep, "/")
 		if dash := strings.IndexByte(portStr, '-'); dash >= 0 {
 			startStr, endStr := portStr[:dash], portStr[dash+1:]
@@ -695,8 +698,12 @@ func resolveSocketActivationPort(unitFile *parser.UnitFile, groupName string) (*
 
 	config.Port.InternalPort = int(pm.ContainerPort)
 
-	if internalStr, ok := unitFile.Lookup(groupName, KeySocketActivationInternalPort); ok {
-		internalPort, err := strconv.Atoi(internalStr)
+	internalEntries := unitFile.LookupAll(groupName, KeySocketActivationInternalPort)
+	if len(internalEntries) > 1 {
+		return nil, warnings, fmt.Errorf("SocketActivationInternalPort must not be specified more than once")
+	}
+	if len(internalEntries) == 1 {
+		internalPort, err := strconv.Atoi(internalEntries[0])
 		if err != nil || internalPort < 1 || internalPort > 65535 {
 			return nil, warnings, fmt.Errorf("SocketActivationInternalPort: port numbers must be between 1 and 65535")
 		}
@@ -739,11 +746,13 @@ func validateSAPNetworkMode(unitFile *parser.UnitFile, groupName string, config 
 		switch {
 		case netw == "host":
 			config.HasPort = false
-			return nil, fmt.Errorf("SocketActivationPort ignored: Network=host does not support socket activation")
+			return fmt.Errorf("SocketActivationPort ignored: Network=host does not support socket activation"), nil
 		case netw == "none":
-			return fmt.Errorf("SocketActivationPort requires a network whose published port is reachable on the loopback where the proxy runs; Network=none unsupported"), nil
+			return nil, fmt.Errorf("SocketActivationPort requires a network whose published port is reachable on the loopback where the proxy runs; Network=none unsupported")
 		case strings.HasPrefix(netw, "container:"):
-			return fmt.Errorf("SocketActivationPort requires a network whose published port is reachable on the loopback where the proxy runs; Network=%s unsupported", netw), nil
+			return nil, fmt.Errorf("SocketActivationPort requires a network whose published port is reachable on the loopback where the proxy runs; Network=%s unsupported", netw)
+		case strings.HasSuffix(netw, ".container"):
+			return nil, fmt.Errorf("SocketActivationPort requires a network whose published port is reachable on the loopback where the proxy runs; Network=%s unsupported (container reference resolves to a foreign netns)", netw)
 		}
 	}
 	return nil, nil
@@ -763,7 +772,7 @@ func buildListenStream(hostIP string, hostPort uint16) string {
 	}
 }
 
-func generateSAPUnits(config *socketActivationConfig, serviceName string, containerServiceFile string, isTemplate bool, isPod bool) ([]*parser.UnitFile, error, error) {
+func generateSAPUnits(config *socketActivationConfig, serviceName string, containerServiceFile string, isTemplate bool) ([]*parser.UnitFile, error, error) {
 	var warnings error
 
 	proxydPath, err := exec.LookPath("systemd-socket-proxyd")
@@ -777,7 +786,9 @@ func generateSAPUnits(config *socketActivationConfig, serviceName string, contai
 	socketName := serviceName + ".socket"
 	proxyName := serviceName + "-proxy.service"
 	if isTemplate {
-		proxyName = removeExtension(serviceName, "", "") + "-proxy@.service"
+		proxyBase := removeExtension(serviceName, "", "")
+		proxyBase = strings.TrimSuffix(proxyBase, "@")
+		proxyName = proxyBase + "-proxy@.service"
 	}
 
 	socketUnit := parser.NewUnitFile()
@@ -1131,7 +1142,7 @@ func ConvertContainer(container *parser.UnitFile, unitsInfoMap map[string]*UnitI
 		return nil, warnings, sapErr, nil
 	}
 
-	sapNetErr, sapNetWarn := validateSAPNetworkMode(container, ContainerGroup, sapConfig)
+	sapNetWarn, sapNetErr := validateSAPNetworkMode(container, ContainerGroup, sapConfig)
 	warnings = errors.Join(warnings, sapNetWarn)
 	if sapNetErr != nil {
 		return nil, warnings, sapNetErr, nil
@@ -1199,6 +1210,14 @@ func ConvertContainer(container *parser.UnitFile, unitsInfoMap map[string]*UnitI
 
 	handlePodmanArgs(container, ContainerGroup, podman)
 
+	if sapConfig.HasPort {
+		for _, arg := range container.LookupAllArgs(ContainerGroup, KeyPodmanArgs) {
+			if strings.HasPrefix(arg, "--network=") || strings.HasPrefix(arg, "--publish=") {
+				warnings = errors.Join(warnings, fmt.Errorf("SocketActivationPort: PodmanArgs contains %s which may override or conflict with socket activation settings", arg))
+			}
+		}
+	}
+
 	if len(image) > 0 {
 		podman.add(image)
 	} else {
@@ -1216,7 +1235,7 @@ func ConvertContainer(container *parser.UnitFile, unitsInfoMap map[string]*UnitI
 	var extras []*parser.UnitFile
 	if sapConfig.HasPort {
 		baseName := removeExtension(service.Filename, "", "")
-		sapExtras, proxydWarn, proxydErr := generateSAPUnits(sapConfig, baseName, service.Filename, IsTemplateUnitFileName(container.Filename), false)
+		sapExtras, proxydWarn, proxydErr := generateSAPUnits(sapConfig, baseName, service.Filename, IsTemplateUnitFileName(container.Filename))
 		warnings = errors.Join(warnings, proxydWarn)
 		if proxydErr != nil {
 			return nil, warnings, proxydErr, nil
@@ -1953,10 +1972,10 @@ func ConvertPod(podUnit *parser.UnitFile, unitsInfoMap map[string]*UnitInfo, isU
 		return nil, warnings, podSapErr, nil
 	}
 
-	podNetErr, podNetWarn := validateSAPNetworkMode(podUnit, PodGroup, podSapConfig)
-	warnings = errors.Join(warnings, podNetWarn)
-	if podNetErr != nil {
-		return nil, warnings, podNetErr, nil
+	sapNetWarn, sapNetErr := validateSAPNetworkMode(podUnit, PodGroup, podSapConfig)
+	warnings = errors.Join(warnings, sapNetWarn)
+	if sapNetErr != nil {
+		return nil, warnings, sapNetErr, nil
 	}
 
 	if podSapConfig.HasPort {
@@ -2008,6 +2027,14 @@ func ConvertPod(podUnit *parser.UnitFile, unitsInfoMap map[string]*UnitInfo, isU
 
 	handlePodmanArgs(podUnit, PodGroup, execStartPre)
 
+	if podSapConfig.HasPort {
+		for _, arg := range podUnit.LookupAllArgs(PodGroup, KeyPodmanArgs) {
+			if strings.HasPrefix(arg, "--network=") || strings.HasPrefix(arg, "--publish=") {
+				warnings = errors.Join(warnings, fmt.Errorf("SocketActivationPort: PodmanArgs contains %s which may override or conflict with socket activation settings", arg))
+			}
+		}
+	}
+
 	service.AddCmdline(ServiceGroup, "ExecStartPre", execStartPre.Args)
 
 	// Set PODMAN_SYSTEMD_UNIT so that podman auto-update can restart the service.
@@ -2025,7 +2052,7 @@ func ConvertPod(podUnit *parser.UnitFile, unitsInfoMap map[string]*UnitInfo, isU
 	var podExtras []*parser.UnitFile
 	if podSapConfig.HasPort {
 		podBaseName := removeExtension(service.Filename, "", "")
-		podSapExtras, podProxydWarn, podProxydErr := generateSAPUnits(podSapConfig, podBaseName, service.Filename, IsTemplateUnitFileName(podUnit.Filename), true)
+		podSapExtras, podProxydWarn, podProxydErr := generateSAPUnits(podSapConfig, podBaseName, service.Filename, IsTemplateUnitFileName(podUnit.Filename))
 		warnings = errors.Join(warnings, podProxydWarn)
 		if podProxydErr != nil {
 			return nil, warnings, podProxydErr, nil

@@ -359,6 +359,155 @@ func TestSocketActivationPort_Positive(t *testing.T) {
 		_, hasRN := proxyUnit.Lookup("Service", "RestrictNamespaces")
 		assert.False(t, hasRN, "RestrictNamespaces must NOT be present")
 	})
+
+	t.Run("ConvertPod basic", func(t *testing.T) {
+		u := makeContainerUnit("test.pod", "[Pod]\nPodName=test\nSocketActivationPort=8080:80\n")
+		unitsInfoMap := map[string]*UnitInfo{
+			"test.pod": {ServiceName: "test-pod", ResourceName: "systemd-test-pod"},
+		}
+
+		svc, _, err, extras := ConvertPod(u, unitsInfoMap, false)
+		require.NoError(t, err)
+		require.NotNil(t, svc)
+		require.Len(t, extras, 2)
+
+		execPre := svc.LookupAll("Service", "ExecStartPre")
+		require.Len(t, execPre, 1)
+		assert.True(t, strings.Contains(execPre[0], "--publish 127.0.0.1:80:80"))
+
+		socketUnit := extras[0]
+		assert.Equal(t, "test-pod.socket", socketUnit.Filename)
+		listen, _ := socketUnit.Lookup("Socket", "ListenStream")
+		assert.Equal(t, "8080", listen)
+
+		proxyUnit := extras[1]
+		assert.Equal(t, "test-pod-proxy.service", proxyUnit.Filename)
+		requires, _ := proxyUnit.Lookup("Unit", "Requires")
+		assert.Equal(t, "test-pod.service", requires)
+	})
+
+	t.Run("Network=container:XXX error", func(t *testing.T) {
+		u := makeContainerUnit("test.container", "[Container]\nImage=test\nSocketActivationPort=8080:80\nNetwork=container:other\n")
+		unitsInfoMap := map[string]*UnitInfo{
+			"test.container": {ServiceName: "test", ResourceName: "systemd-test"},
+		}
+
+		_, _, err, _ := ConvertContainer(u, unitsInfoMap, false)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "unsupported")
+	})
+
+	t.Run("Network=.container error", func(t *testing.T) {
+		u := makeContainerUnit("test.container", "[Container]\nImage=test\nSocketActivationPort=8080:80\nNetwork=other.container\n")
+		unitsInfoMap := map[string]*UnitInfo{
+			"test.container": {ServiceName: "test", ResourceName: "systemd-test"},
+		}
+
+		_, _, err, _ := ConvertContainer(u, unitsInfoMap, false)
+		require.Error(t, err)
+		// Error comes from addNetworks (unit not found in map) before SAP validation
+		assert.Contains(t, err.Error(), "was not found")
+	})
+
+	t.Run("ExposeHostPort in usedPorts", func(t *testing.T) {
+		u := makeContainerUnit("test.container", "[Container]\nImage=test\nExposeHostPort=80\nSocketActivationPort=8080:80\n")
+		unitsInfoMap := map[string]*UnitInfo{
+			"test.container": {ServiceName: "test", ResourceName: "systemd-test"},
+		}
+
+		svc, _, err, _ := ConvertContainer(u, unitsInfoMap, false)
+		require.NoError(t, err)
+		execStart := svc.LookupAll("Service", "ExecStart")
+		require.Len(t, execStart, 1)
+		assert.True(t, strings.Contains(execStart[0], "127.0.0.1:81:80"), "internal 80 collides with EHP 80 → should search to 81")
+	})
+
+	t.Run("ExposeHostPort range in usedPorts", func(t *testing.T) {
+		u := makeContainerUnit("test.container", "[Container]\nImage=test\nExposeHostPort=80-82\nSocketActivationPort=8080:80\n")
+		unitsInfoMap := map[string]*UnitInfo{
+			"test.container": {ServiceName: "test", ResourceName: "systemd-test"},
+		}
+
+		svc, _, err, _ := ConvertContainer(u, unitsInfoMap, false)
+		require.NoError(t, err)
+		execStart := svc.LookupAll("Service", "ExecStart")
+		require.Len(t, execStart, 1)
+		assert.True(t, strings.Contains(execStart[0], "127.0.0.1:83:80"), "internal 80 collides with EHP 80-82 → should search to 83")
+	})
+
+	t.Run("PodmanArgs network warning", func(t *testing.T) {
+		u := makeContainerUnit("test.container", "[Container]\nImage=test\nSocketActivationPort=8080:80\nPodmanArgs=--network=none\n")
+		unitsInfoMap := map[string]*UnitInfo{
+			"test.container": {ServiceName: "test", ResourceName: "systemd-test"},
+		}
+
+		_, warnings, err, _ := ConvertContainer(u, unitsInfoMap, false)
+		require.NoError(t, err)
+		require.NotNil(t, warnings)
+		assert.Contains(t, warnings.Error(), "PodmanArgs")
+	})
+
+	t.Run("isPortRange invalid EHP rejected", func(t *testing.T) {
+		u := makeContainerUnit("test.container", "[Container]\nImage=test\nExposeHostPort=invalid\nSocketActivationPort=8080:80\n")
+		unitsInfoMap := map[string]*UnitInfo{
+			"test.container": {ServiceName: "test", ResourceName: "systemd-test"},
+		}
+
+		_, _, err, _ := ConvertContainer(u, unitsInfoMap, false)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "invalid port format", "invalid EHP rejected by main ConvertContainer before SAP")
+	})
+
+	t.Run("template proxy naming", func(t *testing.T) {
+		u := makeContainerUnit("test@.container", "[Container]\nImage=test\nSocketActivationPort=8080:80\n[Install]\nDefaultInstance=1\n")
+		unitsInfoMap := map[string]*UnitInfo{
+			"test@.container": {ServiceName: "test@", ResourceName: "systemd-test"},
+		}
+
+		_, _, err, extras := ConvertContainer(u, unitsInfoMap, false)
+		require.NoError(t, err)
+		require.Len(t, extras, 2)
+
+		proxyUnit := extras[1]
+		assert.Equal(t, "test-proxy@.service", proxyUnit.Filename, "template proxy must be test-proxy@.service, not test@-proxy@.service")
+	})
+
+	t.Run("duplicate InternalPort error", func(t *testing.T) {
+		u := makeContainerUnit("test.container", "[Container]\nImage=test\nSocketActivationPort=8080:80\nSocketActivationInternalPort=90\nSocketActivationInternalPort=91\n")
+		unitsInfoMap := map[string]*UnitInfo{
+			"test.container": {ServiceName: "test", ResourceName: "systemd-test"},
+		}
+
+		_, _, err, _ := ConvertContainer(u, unitsInfoMap, false)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "must not be specified more than once")
+	})
+
+	t.Run("unknown option not --timeout without value", func(t *testing.T) {
+		u := makeContainerUnit("test.container", "[Container]\nImage=test\nSocketActivationPort=8080:80\nSocketActivationPortOptions=--unknown-flag\n")
+		unitsInfoMap := map[string]*UnitInfo{
+			"test.container": {ServiceName: "test", ResourceName: "systemd-test"},
+		}
+
+		_, _, err, _ := ConvertContainer(u, unitsInfoMap, false)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "unknown option")
+	})
+
+	t.Run("valid option --buffer-size accepted", func(t *testing.T) {
+		u := makeContainerUnit("test.container", "[Container]\nImage=test\nSocketActivationPort=8080:80\nSocketActivationPortOptions=--buffer-size=65536\n")
+		unitsInfoMap := map[string]*UnitInfo{
+			"test.container": {ServiceName: "test", ResourceName: "systemd-test"},
+		}
+
+		_, _, err, extras := ConvertContainer(u, unitsInfoMap, false)
+		require.NoError(t, err)
+		require.Len(t, extras, 2)
+		proxyUnit := extras[1]
+		execStart := proxyUnit.LookupAll("Service", "ExecStart")
+		require.Len(t, execStart, 1)
+		assert.True(t, strings.Contains(execStart[0], "--buffer-size=65536"))
+	})
 }
 
 func getKey(t *testing.T, uf *parser.UnitFile, group, key string) string {
