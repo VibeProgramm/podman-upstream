@@ -601,6 +601,61 @@ func usernsOpts(kind string, opts []string) string {
 	return kind + ":" + strings.Join(opts, ",")
 }
 
+// validateAndSetKillMode checks that KillMode is "mixed" or "control-group",
+// defaulting to "mixed" if not set. Returns an error for any other value.
+func validateAndSetKillMode(service *parser.UnitFile) error {
+	killMode, ok := service.Lookup(ServiceGroup, "KillMode")
+	if !ok || (killMode != "mixed" && killMode != "control-group") {
+		if ok {
+			return fmt.Errorf("invalid KillMode '%s'", killMode)
+		}
+		// We default to mixed instead of control-group, because it lets conmon do its thing
+		service.Set(ServiceGroup, "KillMode", "mixed")
+	}
+	return nil
+}
+
+// setDefaultSyslogIdentifier sets SyslogIdentifier=%N if not already set by the user.
+func setDefaultSyslogIdentifier(unit *parser.UnitFile, service *parser.UnitFile) {
+	if !unit.HasKey(ServiceGroup, "SyslogIdentifier") {
+		service.Set(ServiceGroup, "SyslogIdentifier", "%N")
+	}
+}
+
+// setDefaultPodmanSystemdUnit sets PODMAN_SYSTEMD_UNIT=%n for auto-update support.
+func setDefaultPodmanSystemdUnit(service *parser.UnitFile) {
+	service.Add(ServiceGroup, "Environment", "PODMAN_SYSTEMD_UNIT=%n")
+}
+
+// validateServiceType checks that the service Type is "notify" or "oneshot" (or unset).
+// Returns the resolved type and any error.
+func validateServiceType(service *parser.UnitFile) (string, error) {
+	serviceType, ok := service.Lookup(ServiceGroup, "Type")
+	if ok && serviceType != "notify" && serviceType != "oneshot" {
+		return serviceType, fmt.Errorf("invalid service Type '%s'", serviceType)
+	}
+	return serviceType, nil
+}
+
+// resolveAndValidateSAP resolves SocketActivationPort entries and validates compatibility.
+// Returns the resolved ports, options, whether SAP is active, accumulated warnings, and any fatal error.
+func resolveAndValidateSAP(unitFile *parser.UnitFile, groupName string, warnings error) ([]SocketActivationPortSpec, []string, bool, error, error) {
+	sapPorts, sapOptions, sapErr := resolveSocketActivationPorts(unitFile, groupName)
+	if sapErr != nil {
+		return nil, nil, false, warnings, sapErr
+	}
+	hasSAP := len(sapPorts) > 0
+	if hasSAP {
+		var compatWarn, compatErr error
+		sapPorts, hasSAP, compatWarn, compatErr = validateSAPCompatibility(unitFile, groupName, sapPorts)
+		warnings = errors.Join(warnings, compatWarn)
+		if compatErr != nil {
+			return nil, nil, false, warnings, compatErr
+		}
+	}
+	return sapPorts, sapOptions, hasSAP, warnings, nil
+}
+
 // ---- Socket Activation Proxy ----
 
 type SocketActivationPortSpec struct {
@@ -663,7 +718,24 @@ func resolveSocketActivationPorts(unitFile *parser.UnitFile, groupName string) (
 
 	options := unitFile.LookupAllArgs(groupName, KeySocketActivationPortOptions)
 	for _, opt := range options {
-		if name, _, _ := strings.Cut(opt, "="); name != "--timeout" && name != "--buffer-size" && name != "--verbose" {
+		name, value, hasValue := strings.Cut(opt, "=")
+		switch name {
+		case "--timeout":
+			if !hasValue || value == "" {
+				return nil, nil, fmt.Errorf("SocketActivationPortOptions --timeout requires a value")
+			}
+		case "--buffer-size":
+			if !hasValue || value == "" {
+				return nil, nil, fmt.Errorf("SocketActivationPortOptions --buffer-size requires a value")
+			}
+			if sz, err := strconv.Atoi(value); err != nil || sz <= 0 {
+				return nil, nil, fmt.Errorf("SocketActivationPortOptions --buffer-size must be a positive integer, got %q", value)
+			}
+		case "--verbose":
+			if hasValue {
+				return nil, nil, fmt.Errorf("SocketActivationPortOptions --verbose does not take a value")
+			}
+		default:
 			return nil, nil, fmt.Errorf("SocketActivationPortOptions contains unknown option %q", opt)
 		}
 	}
@@ -698,6 +770,8 @@ func resolveSocketActivationPorts(unitFile *parser.UnitFile, groupName string) (
 		if portMapping.Protocol != "" && !strings.EqualFold(portMapping.Protocol, "tcp") {
 			return nil, nil, errors.New("SocketActivationPort only supports TCP protocol")
 		}
+		// Defense-in-depth: CreatePortBindings already rejects ContainerPort == 0,
+		// but we guard against future changes to the upstream parser.
 		if portMapping.ContainerPort == 0 {
 			return nil, nil, fmt.Errorf("must provide a non-empty container port to publish")
 		}
@@ -719,7 +793,7 @@ func resolveSocketActivationPorts(unitFile *parser.UnitFile, groupName string) (
 			}
 		}
 
-		internalPort := max(int(portMapping.ContainerPort), lastAssignedPort)
+		internalPort := max(int(portMapping.ContainerPort), lastAssignedPort, minUnprivilegedPort)
 		if internalPort > maxPort {
 			return nil, nil, fmt.Errorf("no available internal port found for socket activation (exhausted port range)")
 		}
@@ -832,7 +906,7 @@ func generateSAPUnits(spec SocketActivationPortSpec, options []string, serviceNa
 	proxyUnit.AddCmdline(ServiceGroup, "ExecStart", args)
 
 	proxyUnit.Set(ServiceGroup, "Type", "simple")
-	proxyUnit.Set(ServiceGroup, "Restart", "on-failure")
+	proxyUnit.Set(ServiceGroup, "Restart", "no")
 
 	proxyUnit.Set(ServiceGroup, "PrivateTmp", "yes")
 	proxyUnit.Set(ServiceGroup, "ProtectSystem", "strict")
@@ -848,6 +922,7 @@ func generateSAPUnits(spec SocketActivationPortSpec, options []string, serviceNa
 	proxyUnit.Set(ServiceGroup, "RestrictSUIDSGID", "yes")
 	proxyUnit.Set(ServiceGroup, "SystemCallFilter", "@system-service")
 	proxyUnit.Set(ServiceGroup, "SystemCallErrorNumber", "EPERM")
+	proxyUnit.Set(ServiceGroup, "CapabilityBoundingSet", "")
 
 	return []*parser.UnitFile{socketUnit, proxyUnit}, warnings, nil
 }
@@ -875,7 +950,7 @@ func checkSAPPodmanArgsConflicts(unitFile *parser.UnitFile, groupName string, sa
 					if pr == 0 {
 						pr = 1
 					}
-					if int(sap.HostPort) >= int(pp.HostPort) && int(sap.HostPort) < int(pp.HostPort)+pr {
+					if pp.HostPort != 0 && int(sap.HostPort) >= int(pp.HostPort) && int(sap.HostPort) < int(pp.HostPort)+pr {
 						return warnings, fmt.Errorf("SocketActivationPort host port %d conflicts with PodmanArgs --publish=%s", sap.HostPort, publishVal)
 					}
 				}
@@ -973,17 +1048,11 @@ func ConvertContainer(container *parser.UnitFile, unitsInfoMap map[string]*UnitI
 	containerName := getContainerName(container)
 
 	// Set PODMAN_SYSTEMD_UNIT so that podman auto-update can restart the service.
-	service.Add(ServiceGroup, "Environment", "PODMAN_SYSTEMD_UNIT=%n")
+	setDefaultPodmanSystemdUnit(service)
 
 	// Only allow mixed or control-group, as nothing else works well
-	killMode, ok := service.Lookup(ServiceGroup, "KillMode")
-	if !ok || (killMode != "mixed" && killMode != "control-group") {
-		if ok {
-			return nil, warnings, fmt.Errorf("invalid KillMode '%s'", killMode), nil
-		}
-
-		// We default to mixed instead of control-group, because it lets conmon do its thing
-		service.Set(ServiceGroup, "KillMode", "mixed")
+	if err := validateAndSetKillMode(service); err != nil {
+		return nil, warnings, err, nil
 	}
 
 	// If conmon exited uncleanly it may not have removed the container, so
@@ -1077,9 +1146,9 @@ func ConvertContainer(container *parser.UnitFile, unitsInfoMap map[string]*UnitI
 		return nil, warnings, err, nil
 	}
 
-	serviceType, ok := service.Lookup(ServiceGroup, "Type")
-	if ok && serviceType != "notify" && serviceType != "oneshot" {
-		return nil, warnings, fmt.Errorf("invalid service Type '%s'", serviceType), nil
+	serviceType, err := validateServiceType(service)
+	if err != nil {
+		return nil, warnings, err, nil
 	}
 
 	if serviceType != "oneshot" {
@@ -1102,9 +1171,7 @@ func ConvertContainer(container *parser.UnitFile, unitsInfoMap map[string]*UnitI
 		podman.add("-d")
 	}
 
-	if !container.HasKey(ServiceGroup, "SyslogIdentifier") {
-		service.Set(ServiceGroup, "SyslogIdentifier", "%N")
-	}
+	setDefaultSyslogIdentifier(container, service)
 
 	// Default to no higher level privileges or caps
 	noNewPrivileges := container.LookupBooleanWithDefault(ContainerGroup, KeyNoNewPrivileges, false)
@@ -1224,19 +1291,9 @@ func ConvertContainer(container *parser.UnitFile, unitsInfoMap map[string]*UnitI
 
 	handlePublishPorts(container, ContainerGroup, podman)
 
-	sapPorts, sapOptions, sapErr := resolveSocketActivationPorts(container, ContainerGroup)
+	sapPorts, sapOptions, hasSAP, warnings, sapErr := resolveAndValidateSAP(container, ContainerGroup, warnings)
 	if sapErr != nil {
 		return nil, warnings, sapErr, nil
-	}
-	hasSAP := len(sapPorts) > 0
-
-	if hasSAP {
-		var compatWarn, compatErr error
-		sapPorts, hasSAP, compatWarn, compatErr = validateSAPCompatibility(container, ContainerGroup, sapPorts)
-		warnings = errors.Join(warnings, compatWarn)
-		if compatErr != nil {
-			return nil, warnings, compatErr, nil
-		}
 	}
 	if hasSAP {
 		for _, p := range sapPorts {
@@ -1372,11 +1429,9 @@ func GetContainerResourceName(container *parser.UnitFile) string {
 	}
 }
 
-func defaultOneshotServiceGroup(service *parser.UnitFile, remainAfterExit bool) {
+func defaultOneshotServiceGroup(unit *parser.UnitFile, service *parser.UnitFile, remainAfterExit bool) {
 	// The default syslog identifier is the exec basename (podman) which isn't very useful here
-	if _, ok := service.Lookup(ServiceGroup, "SyslogIdentifier"); !ok {
-		service.Set(ServiceGroup, "SyslogIdentifier", "%N")
-	}
+	setDefaultSyslogIdentifier(unit, service)
 	if _, ok := service.Lookup(ServiceGroup, "Type"); !ok {
 		service.Set(ServiceGroup, "Type", "oneshot")
 	}
@@ -1469,7 +1524,7 @@ func ConvertNetwork(network *parser.UnitFile, unitsInfoMap map[string]*UnitInfo,
 
 	service.AddCmdline(ServiceGroup, "ExecStart", podman.Args)
 
-	defaultOneshotServiceGroup(service, true)
+	defaultOneshotServiceGroup(network, service, true)
 
 	// Store the name of the created resource
 	unitInfo.ResourceName = networkName
@@ -1600,7 +1655,7 @@ func ConvertVolume(volume *parser.UnitFile, unitsInfoMap map[string]*UnitInfo, i
 
 	service.AddCmdline(ServiceGroup, "ExecStart", podman.Args)
 
-	defaultOneshotServiceGroup(service, true)
+	defaultOneshotServiceGroup(volume, service, true)
 
 	// Store the name of the created resource
 	unitInfo.ResourceName = volumeName
@@ -1630,23 +1685,17 @@ func ConvertKube(kube *parser.UnitFile, unitsInfoMap map[string]*UnitInfo, isUse
 	}
 
 	// Only allow mixed or control-group, as nothing else works well
-	killMode, ok := service.Lookup(ServiceGroup, "KillMode")
-	if !ok || (killMode != "mixed" && killMode != "control-group") {
-		if ok {
-			return nil, fmt.Errorf("invalid KillMode '%s'", killMode)
-		}
-
-		// We default to mixed instead of control-group, because it lets conmon do its thing
-		service.Set(ServiceGroup, "KillMode", "mixed")
+	if err := validateAndSetKillMode(service); err != nil {
+		return nil, err
 	}
 
 	// Set PODMAN_SYSTEMD_UNIT so that podman auto-update can restart the service.
-	service.Add(ServiceGroup, "Environment", "PODMAN_SYSTEMD_UNIT=%n")
+	setDefaultPodmanSystemdUnit(service)
 
 	// Allow users to set the Service Type to oneshot to allow resources only kube yaml
-	serviceType, ok := service.Lookup(ServiceGroup, "Type")
-	if ok && serviceType != "notify" && serviceType != "oneshot" {
-		return nil, fmt.Errorf("invalid service Type '%s'", serviceType)
+	serviceType, err := validateServiceType(service)
+	if err != nil {
+		return nil, err
 	}
 
 	if serviceType != "oneshot" {
@@ -1655,9 +1704,7 @@ func ConvertKube(kube *parser.UnitFile, unitsInfoMap map[string]*UnitInfo, isUse
 			"NotifyAccess", "all")
 	}
 
-	if !kube.HasKey(ServiceGroup, "SyslogIdentifier") {
-		service.Set(ServiceGroup, "SyslogIdentifier", "%N")
-	}
+	setDefaultSyslogIdentifier(kube, service)
 
 	execStart := createBasePodmanCommand(kube, KubeGroup)
 
@@ -1779,7 +1826,7 @@ func ConvertImage(image *parser.UnitFile, unitsInfoMap map[string]*UnitInfo, isU
 
 	service.AddCmdline(ServiceGroup, "ExecStart", podman.Args)
 
-	defaultOneshotServiceGroup(service, true)
+	defaultOneshotServiceGroup(image, service, true)
 
 	if name, ok := image.Lookup(ImageGroup, KeyImageTag); ok && len(name) > 0 {
 		imageName = name
@@ -1895,7 +1942,7 @@ func ConvertBuild(build *parser.UnitFile, unitsInfoMap map[string]*UnitInfo, isU
 
 	service.AddCmdline(ServiceGroup, "ExecStart", podman.Args)
 
-	defaultOneshotServiceGroup(service, false)
+	defaultOneshotServiceGroup(build, service, false)
 	return service, warnings, nil
 }
 
@@ -2003,9 +2050,7 @@ func ConvertPod(podUnit *parser.UnitFile, unitsInfoMap map[string]*UnitInfo, isU
 		service.Add(UnitGroup, "Before", containerService)
 	}
 
-	if !podUnit.HasKey(ServiceGroup, "SyslogIdentifier") {
-		service.Set(ServiceGroup, "SyslogIdentifier", "%N")
-	}
+	setDefaultSyslogIdentifier(podUnit, service)
 
 	execStart := createBasePodmanCommand(podUnit, PodGroup)
 	execStart.add("pod", "start", podName)
@@ -2048,19 +2093,9 @@ func ConvertPod(podUnit *parser.UnitFile, unitsInfoMap map[string]*UnitInfo, isU
 
 	handlePublishPorts(podUnit, PodGroup, execStartPre)
 
-	podSAPPorts, podSAPOptions, podSAPErr := resolveSocketActivationPorts(podUnit, PodGroup)
+	podSAPPorts, podSAPOptions, podHasSAP, warnings, podSAPErr := resolveAndValidateSAP(podUnit, PodGroup, warnings)
 	if podSAPErr != nil {
 		return nil, warnings, podSAPErr, nil
-	}
-	podHasSAP := len(podSAPPorts) > 0
-
-	if podHasSAP {
-		var compatWarn, compatErr error
-		podSAPPorts, podHasSAP, compatWarn, compatErr = validateSAPCompatibility(podUnit, PodGroup, podSAPPorts)
-		warnings = errors.Join(warnings, compatWarn)
-		if compatErr != nil {
-			return nil, warnings, compatErr, nil
-		}
 	}
 	if podHasSAP {
 		for _, p := range podSAPPorts {
@@ -2107,7 +2142,7 @@ func ConvertPod(podUnit *parser.UnitFile, unitsInfoMap map[string]*UnitInfo, isU
 	service.AddCmdline(ServiceGroup, "ExecStartPre", execStartPre.Args)
 
 	// Set PODMAN_SYSTEMD_UNIT so that podman auto-update can restart the service.
-	service.Add(ServiceGroup, "Environment", "PODMAN_SYSTEMD_UNIT=%n")
+	setDefaultPodmanSystemdUnit(service)
 
 	service.Setv(
 		ServiceGroup,
@@ -2190,8 +2225,8 @@ func handleUserMappings(unitFile *parser.UnitFile, groupName string, podman *Pod
 	if mappingsDefined {
 		_, hasRemapUID := unitFile.Lookup(groupName, KeyRemapUid)
 		_, hasRemapGID := unitFile.Lookup(groupName, KeyRemapGid)
-		_, RemapUsers := unitFile.LookupLast(groupName, KeyRemapUsers)
-		if hasRemapUID || hasRemapGID || RemapUsers {
+		_, remapUsers := unitFile.LookupLast(groupName, KeyRemapUsers)
+		if hasRemapUID || hasRemapGID || remapUsers {
 			return fmt.Errorf("deprecated Remap keys are set along with explicit mapping keys")
 		}
 		return nil
@@ -2551,14 +2586,14 @@ func resolveContainerMountParams(containerUnitFile, serviceUnitFile *parser.Unit
 	}
 
 	// Source resolution is required only for these types of mounts
-	sourceResultionRequired := map[string]struct{}{
+	sourceResolutionRequired := map[string]struct{}{
 		"volume":   {},
 		"bind":     {},
 		"glob":     {},
 		"image":    {},
 		"artifact": {},
 	}
-	if _, ok := sourceResultionRequired[mountType]; !ok {
+	if _, ok := sourceResolutionRequired[mountType]; !ok {
 		return mount, nil
 	}
 
@@ -2767,13 +2802,13 @@ func translateUnitDependencies(serviceUnitFile *parser.UnitFile, unitsInfoMap ma
 }
 
 func lookupAndAddKeyVals(unit *parser.UnitFile, group string, keys map[string]string, podman *PodmanCmdline) error {
-	var warnings error
+	var lookupWarnings error
 	for key, flag := range keys {
 		keyVals, warn := unit.LookupAllKeyVal(group, key)
-		warnings = errors.Join(warnings, warn)
+		lookupWarnings = errors.Join(lookupWarnings, warn)
 		podman.addKeys(flag, keyVals)
 	}
-	return warnings
+	return lookupWarnings
 }
 
 func initServiceUnitFile(quadletUnitFile *parser.UnitFile, isUser bool, unitsInfoMap map[string]*UnitInfo, group string) (*parser.UnitFile, *UnitInfo, error) {
@@ -2848,7 +2883,7 @@ func ConvertArtifact(artifact *parser.UnitFile, unitsInfoMap map[string]*UnitInf
 
 	service.AddCmdline(ServiceGroup, "ExecStart", podman.Args)
 
-	defaultOneshotServiceGroup(service, true)
+	defaultOneshotServiceGroup(artifact, service, true)
 
 	unitInfo.ResourceName = artifactName
 

@@ -239,7 +239,7 @@ func TestSocketActivationPort_Positive(t *testing.T) {
 
 	// Collision avoidance: internalPort occupied → search upward
 	t.Run("collision avoidance", func(t *testing.T) {
-		u := makeContainerUnit("test.container", "[Container]\nImage=test\nPublishPort=80:8080\nSocketActivationPort=8080:80\n")
+		u := makeContainerUnit("test.container", "[Container]\nImage=test\nExposeHostPort=1024\nSocketActivationPort=8080:80\n")
 		unitsInfoMap := map[string]*UnitInfo{
 			"test.container": {ServiceName: "test", ResourceName: "systemd-test"},
 		}
@@ -249,9 +249,9 @@ func TestSocketActivationPort_Positive(t *testing.T) {
 
 		execStart := svc.LookupAll("Service", "ExecStart")
 		require.Len(t, execStart, 1)
-		// PP containerPort 8080 → usedPorts has 80 (host) + 8080 (container)
-		// SAP containerPort 80 → internal starts at max(1024, 80)=1024 → free
-		assert.True(t, strings.Contains(execStart[0], "127.0.0.1:1024:80"))
+		// ExposeHostPort=1024 → usedPorts has 1024
+		// SAP containerPort 80 → internal starts at max(1024, 1024)=1024 → 1024 occupied → search → 1025
+		assert.True(t, strings.Contains(execStart[0], "127.0.0.1:1025:80"))
 	})
 
 	// Network=host → warning, skip
@@ -331,10 +331,21 @@ func TestSocketActivationPort_Positive(t *testing.T) {
 		proxyUnit := extras[1]
 		assert.Equal(t, "yes", getKey(t, proxyUnit, "Service", "PrivateTmp"))
 		assert.Equal(t, "strict", getKey(t, proxyUnit, "Service", "ProtectSystem"))
+		assert.Equal(t, "yes", getKey(t, proxyUnit, "Service", "ProtectHome"))
+		assert.Equal(t, "yes", getKey(t, proxyUnit, "Service", "NoNewPrivileges"))
+		assert.Equal(t, "yes", getKey(t, proxyUnit, "Service", "ProtectKernelTunables"))
+		assert.Equal(t, "yes", getKey(t, proxyUnit, "Service", "ProtectKernelModules"))
+		assert.Equal(t, "yes", getKey(t, proxyUnit, "Service", "ProtectControlGroups"))
+		assert.Equal(t, "AF_INET AF_INET6 AF_UNIX", getKey(t, proxyUnit, "Service", "RestrictAddressFamilies"))
+		assert.Equal(t, "yes", getKey(t, proxyUnit, "Service", "LockPersonality"))
+		assert.Equal(t, "yes", getKey(t, proxyUnit, "Service", "RestrictRealtime"))
 		assert.Equal(t, "yes", getKey(t, proxyUnit, "Service", "PrivateDevices"))
 		assert.Equal(t, "yes", getKey(t, proxyUnit, "Service", "RestrictSUIDSGID"))
-		assert.Equal(t, "yes", getKey(t, proxyUnit, "Service", "RestrictRealtime"))
 		assert.Equal(t, "@system-service", getKey(t, proxyUnit, "Service", "SystemCallFilter"))
+		assert.Equal(t, "EPERM", getKey(t, proxyUnit, "Service", "SystemCallErrorNumber"))
+		cbsVal, hasCBS := proxyUnit.Lookup("Service", "CapabilityBoundingSet")
+		assert.True(t, hasCBS, "CapabilityBoundingSet must be present")
+		assert.Equal(t, "", cbsVal, "CapabilityBoundingSet must be empty (drop all caps)")
 
 		_, hasMDE := proxyUnit.Lookup("Service", "MemoryDenyWriteExecute")
 		assert.False(t, hasMDE, "MemoryDenyWriteExecute must NOT be present")
