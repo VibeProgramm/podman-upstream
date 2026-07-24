@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"go.podman.io/common/libnetwork/types"
 	"go.podman.io/podman/v6/pkg/specgenutil"
@@ -184,6 +185,7 @@ const (
 	KeyShmSize                     = "ShmSize"
 	KeySocketActivationPort        = "SocketActivationPort"
 	KeySocketActivationPortOptions = "SocketActivationPortOptions"
+	KeySocketIdleTimeout           = "SocketIdleTimeout"
 	KeyStartWithPod                = "StartWithPod"
 	KeyStopSignal                  = "StopSignal"
 	KeyStopTimeout                 = "StopTimeout"
@@ -342,6 +344,7 @@ var (
 				KeyShmSize:                     true,
 				KeySocketActivationPort:        true,
 				KeySocketActivationPortOptions: true,
+				KeySocketIdleTimeout:           true,
 				KeyStopSignal:                  true,
 				KeyStartWithPod:                true,
 				KeyStopTimeout:                 true,
@@ -537,6 +540,7 @@ var (
 				KeyShmSize:                     true,
 				KeySocketActivationPort:        true,
 				KeySocketActivationPortOptions: true,
+				KeySocketIdleTimeout:           true,
 				KeyStopTimeout:                 true,
 				KeySubGIDMap:                   true,
 				KeySubUIDMap:                   true,
@@ -638,29 +642,102 @@ func validateServiceType(service *parser.UnitFile) (string, error) {
 }
 
 // resolveAndValidateSAP resolves SocketActivationPort entries and validates compatibility.
-// Returns the resolved ports, options, whether SAP is active, accumulated warnings, and any fatal error.
-func resolveAndValidateSAP(unitFile *parser.UnitFile, groupName string, warnings error) ([]SocketActivationPortSpec, []string, bool, error, error) {
+func resolveAndValidateSAP(unitFile *parser.UnitFile, groupName string, warnings error) SocketActivationPortConfig {
 	sapPorts, sapOptions, sapErr := resolveSocketActivationPorts(unitFile, groupName)
 	if sapErr != nil {
-		return nil, nil, false, warnings, sapErr
+		return SocketActivationPortConfig{Error: sapErr, Warnings: warnings}
 	}
 	hasSAP := len(sapPorts) > 0
+
+	// Parse SocketIdleTimeout
+	sapIdleTimeout, hasIdleTimeout, idleErr := resolveSocketIdleTimeout(unitFile, groupName)
+	if idleErr != nil {
+		return SocketActivationPortConfig{Error: idleErr, Warnings: warnings}
+	}
+
+	// Validate no duplicate SocketIdleTimeout keys
+	sapIdleTimeoutKeys := unitFile.LookupAll(groupName, KeySocketIdleTimeout)
+	if len(sapIdleTimeoutKeys) > 1 {
+		return SocketActivationPortConfig{
+			Error:    fmt.Errorf("SocketIdleTimeout specified multiple times; only one allowed"),
+			Warnings: warnings,
+		}
+	}
+
 	if hasSAP {
 		var compatWarn, compatErr error
 		sapPorts, hasSAP, compatWarn, compatErr = validateSAPCompatibility(unitFile, groupName, sapPorts)
 		warnings = errors.Join(warnings, compatWarn)
 		if compatErr != nil {
-			return nil, nil, false, warnings, compatErr
+			return SocketActivationPortConfig{Error: compatErr, Warnings: warnings}
 		}
 	}
-	return sapPorts, sapOptions, hasSAP, warnings, nil
+
+	// Validate SocketIdleTimeout requires SocketActivationPort
+	if hasIdleTimeout && !hasSAP {
+		return SocketActivationPortConfig{
+			Error:    fmt.Errorf("SocketIdleTimeout requires SocketActivationPort"),
+			Warnings: warnings,
+		}
+	}
+
+	// Validate SocketIdleTimeout is incompatible with Restart=always
+	if hasIdleTimeout {
+		if restart, ok := unitFile.Lookup(ServiceGroup, "Restart"); ok && restart == "always" {
+			return SocketActivationPortConfig{
+				Error:    fmt.Errorf("SocketIdleTimeout requires Restart=no or Restart=on-failure; Restart=always is incompatible"),
+				Warnings: warnings,
+			}
+		}
+	}
+
+	return SocketActivationPortConfig{
+		Ports:       sapPorts,
+		Options:     sapOptions,
+		IdleTimeout: sapIdleTimeout,
+		HasSAP:      hasSAP,
+		Warnings:    warnings,
+	}
+}
+
+// resolveSocketIdleTimeout parses the SocketIdleTimeout key from the unit file.
+// Returns (value, hasValue, error). The value is a duration string like "20m" or "1h30m".
+// A value of "0" (or any zero-duration like "0s", "0m") is treated as unset (no idle timeout).
+// Negative values are also treated as unset.
+func resolveSocketIdleTimeout(unitFile *parser.UnitFile, groupName string) (string, bool, error) {
+	val, hasVal := unitFile.Lookup(groupName, KeySocketIdleTimeout)
+	if !hasVal || val == "" {
+		return "", false, nil
+	}
+	val = strings.TrimSpace(val)
+	if val == "" {
+		return "", false, nil
+	}
+	d, err := time.ParseDuration(val)
+	if err != nil {
+		return "", false, fmt.Errorf("SocketIdleTimeout: invalid duration %q: %w", val, err)
+	}
+	if d <= 0 {
+		return "", false, nil
+	}
+	return val, true, nil
 }
 
 // ---- Socket Activation Proxy ----
 
 type SocketActivationPortSpec struct {
 	types.PortMapping
-	InternalPort int
+	InternalPort     int
+	SelfLoopRemapped bool // true when initial internalPort == hostPort and was auto-incremented
+}
+
+type SocketActivationPortConfig struct {
+	Ports       []SocketActivationPortSpec
+	Options     []string
+	IdleTimeout string
+	HasSAP      bool
+	Warnings    error
+	Error       error
 }
 
 func addPortToUsed(ep string, usedPorts map[int]struct{}) {
@@ -674,11 +751,15 @@ func addPortToUsed(ep string, usedPorts map[int]struct{}) {
 			for p := start; p <= end; p++ {
 				usedPorts[p] = struct{}{}
 			}
+		} else if err1 != nil || err2 != nil {
+			fmt.Fprintf(os.Stderr, "quadlet: invalid port range %q in port mapping, ignoring\n", ep)
 		}
 	} else {
 		port, err := strconv.Atoi(portStr)
 		if err == nil && port > 0 && port <= maxPort {
 			usedPorts[port] = struct{}{}
+		} else if err != nil {
+			fmt.Fprintf(os.Stderr, "quadlet: invalid port %q in port mapping, ignoring\n", portStr)
 		}
 	}
 }
@@ -720,20 +801,12 @@ func resolveSocketActivationPorts(unitFile *parser.UnitFile, groupName string) (
 	for _, opt := range options {
 		name, value, hasValue := strings.Cut(opt, "=")
 		switch name {
-		case "--timeout":
+		case "--connections-max", "-c":
 			if !hasValue || value == "" {
-				return nil, nil, fmt.Errorf("SocketActivationPortOptions --timeout requires a value")
+				return nil, nil, fmt.Errorf("SocketActivationPortOptions %s requires a value", name)
 			}
-		case "--buffer-size":
-			if !hasValue || value == "" {
-				return nil, nil, fmt.Errorf("SocketActivationPortOptions --buffer-size requires a value")
-			}
-			if sz, err := strconv.Atoi(value); err != nil || sz <= 0 {
-				return nil, nil, fmt.Errorf("SocketActivationPortOptions --buffer-size must be a positive integer, got %q", value)
-			}
-		case "--verbose":
-			if hasValue {
-				return nil, nil, fmt.Errorf("SocketActivationPortOptions --verbose does not take a value")
+			if n, err := strconv.Atoi(value); err != nil || n <= 0 {
+				return nil, nil, fmt.Errorf("SocketActivationPortOptions %s must be a positive integer, got %q", name, value)
 			}
 		default:
 			return nil, nil, fmt.Errorf("SocketActivationPortOptions contains unknown option %q", opt)
@@ -741,7 +814,8 @@ func resolveSocketActivationPorts(unitFile *parser.UnitFile, groupName string) (
 	}
 
 	var ports []SocketActivationPortSpec
-	lastAssignedPort := minUnprivilegedPort
+	seenHostPorts := make(map[int]struct{})
+	sapInternalPorts := make(map[int]struct{})
 	for _, rawSpec := range sapEntries {
 		rawSpec = strings.TrimSpace(rawSpec)
 		if len(rawSpec) == 0 {
@@ -756,10 +830,6 @@ func resolveSocketActivationPorts(unitFile *parser.UnitFile, groupName string) (
 			return nil, nil, fmt.Errorf("SocketActivationPort: %w", err)
 		}
 		portMapping := portMappings[0]
-
-		if portMapping.HostIP == "" {
-			portMapping.HostIP = loopbackAddr
-		}
 
 		if portMapping.HostPort == 0 {
 			return nil, nil, errors.New("SocketActivationPort requires explicit host port (empty host port not allowed)")
@@ -779,6 +849,7 @@ func resolveSocketActivationPorts(unitFile *parser.UnitFile, groupName string) (
 		portMapping.Protocol = "tcp"
 
 		sapHostPort := int(portMapping.HostPort)
+
 		for _, p := range publishedPorts {
 			if p.HostPort == 0 {
 				continue
@@ -793,11 +864,24 @@ func resolveSocketActivationPorts(unitFile *parser.UnitFile, groupName string) (
 			}
 		}
 
-		internalPort := max(int(portMapping.ContainerPort), lastAssignedPort, minUnprivilegedPort)
+		// Check that the SAP hostPort doesn't collide with an internal port
+		// already assigned to a previous SAP entry.
+		if _, used := sapInternalPorts[sapHostPort]; used {
+			return nil, nil, fmt.Errorf("SocketActivationPort host port %d conflicts with an already-assigned internal port", portMapping.HostPort)
+		}
+
+		// Early duplicate host port detection — fail before doing internal port allocation work.
+		if _, seen := seenHostPorts[sapHostPort]; seen {
+			return nil, nil, fmt.Errorf("SocketActivationPort: duplicate host port %d", portMapping.HostPort)
+		}
+		seenHostPorts[sapHostPort] = struct{}{}
+
+		internalPort := max(int(portMapping.ContainerPort), minUnprivilegedPort)
 		if internalPort > maxPort {
 			return nil, nil, fmt.Errorf("no available internal port found for socket activation (exhausted port range)")
 		}
 
+		initialInternalPort := internalPort
 		sapHostPort = int(portMapping.HostPort)
 		for {
 			_, used := usedPorts[internalPort]
@@ -811,23 +895,13 @@ func resolveSocketActivationPorts(unitFile *parser.UnitFile, groupName string) (
 		}
 
 		usedPorts[internalPort] = struct{}{}
-		lastAssignedPort = internalPort + 1
-		if lastAssignedPort > maxPort {
-			lastAssignedPort = minUnprivilegedPort
-		}
+		sapInternalPorts[internalPort] = struct{}{}
 
 		ports = append(ports, SocketActivationPortSpec{
-			PortMapping:  portMapping,
-			InternalPort: internalPort,
+			PortMapping:      portMapping,
+			InternalPort:     internalPort,
+			SelfLoopRemapped: internalPort != initialInternalPort,
 		})
-	}
-
-	hostPorts := make(map[int]struct{})
-	for _, p := range ports {
-		if _, ok := hostPorts[int(p.HostPort)]; ok {
-			return nil, nil, fmt.Errorf("SocketActivationPort: duplicate host port %d", p.HostPort)
-		}
-		hostPorts[int(p.HostPort)] = struct{}{}
 	}
 
 	return ports, options, nil
@@ -847,7 +921,7 @@ func buildListenStream(hostIP string, hostPort uint16) string {
 	}
 }
 
-func generateSAPUnits(spec SocketActivationPortSpec, options []string, serviceName string, containerServiceFile string, isTemplate bool) ([]*parser.UnitFile, error, error) {
+func generateSAPUnits(spec SocketActivationPortSpec, options []string, idleTimeout string, serviceName string, containerServiceFile string, isTemplate bool) ([]*parser.UnitFile, error, error) {
 	// Returns (units, warnings, fatalError).
 	var warnings error
 
@@ -892,9 +966,17 @@ func generateSAPUnits(spec SocketActivationPortSpec, options []string, serviceNa
 	proxyUnit.Filename = proxyName
 
 	proxyUnit.Add(UnitGroup, "Description", fmt.Sprintf("%s port %s socket proxy", serviceName, portStr))
-	proxyUnit.Add(UnitGroup, "Requires", containerServiceFile)
-	proxyUnit.Add(UnitGroup, "After", containerServiceFile)
-	proxyUnit.Add(UnitGroup, "PartOf", containerServiceFile)
+	// For template units, the proxy must reference the container with %i so systemd
+	// resolves the instance at runtime. E.g. test@.service → test@%i.service.
+	depService := containerServiceFile
+	if isTemplate {
+		ext := filepath.Ext(containerServiceFile) // ".service"
+		base := strings.TrimSuffix(strings.TrimSuffix(containerServiceFile, ext), "@")
+		depService = base + "@%i" + ext
+	}
+	proxyUnit.Add(UnitGroup, "Requires", depService)
+	proxyUnit.Add(UnitGroup, "After", depService)
+	proxyUnit.Add(UnitGroup, "PartOf", depService)
 
 	target := fmt.Sprintf("%s:%d", loopbackAddr, spec.InternalPort)
 	path := proxydPath
@@ -902,6 +984,9 @@ func generateSAPUnits(spec SocketActivationPortSpec, options []string, serviceNa
 		path = "systemd-socket-proxyd"
 	}
 	args := append([]string{path}, options...)
+	if idleTimeout != "" {
+		args = append(args, "--exit-idle-time="+idleTimeout)
+	}
 	args = append(args, target)
 	proxyUnit.AddCmdline(ServiceGroup, "ExecStart", args)
 
@@ -955,7 +1040,6 @@ func checkSAPPodmanArgsConflicts(unitFile *parser.UnitFile, groupName string, sa
 					}
 				}
 			}
-			warnings = errors.Join(warnings, fmt.Errorf("SocketActivationPort: PodmanArgs contains %s which may override or conflict with socket activation settings", arg))
 		}
 	}
 	return warnings, nil
@@ -998,14 +1082,14 @@ func validateSAPNetwork(unitFile *parser.UnitFile, groupName string, sapPorts []
 	return sapPorts, true, warnings, nil
 }
 
-func generateSAPExtras(sapPorts []SocketActivationPortSpec, sapOptions []string, serviceFilename string, unitFilename string) ([]*parser.UnitFile, error, error) {
+func generateSAPExtras(sapPorts []SocketActivationPortSpec, sapOptions []string, idleTimeout string, serviceFilename string, unitFilename string) ([]*parser.UnitFile, error, error) {
 	// Returns (units, warnings, fatalError).
 	var extras []*parser.UnitFile
 	var warnings error
 	baseName := removeExtension(serviceFilename, "", "")
 	isTemplate := IsTemplateUnitFileName(unitFilename)
 	for _, p := range sapPorts {
-		sapExtras, proxydWarn, proxydErr := generateSAPUnits(p, sapOptions, baseName, serviceFilename, isTemplate)
+		sapExtras, proxydWarn, proxydErr := generateSAPUnits(p, sapOptions, idleTimeout, baseName, serviceFilename, isTemplate)
 		warnings = errors.Join(warnings, proxydWarn)
 		if proxydErr != nil {
 			return nil, warnings, proxydErr
@@ -1013,6 +1097,22 @@ func generateSAPExtras(sapPorts []SocketActivationPortSpec, sapOptions []string,
 		extras = append(extras, sapExtras...)
 	}
 	return extras, warnings, nil
+}
+
+// applySAPPorts adds --publish flags for each SAP port to the podman command,
+// emits self-loop remapping warnings, and sets StopWhenUnneeded=yes on the service.
+// This is shared between ConvertContainer and ConvertPod to avoid duplicating the
+// SAP publish logic.
+func applySAPPorts(podman *PodmanCmdline, unitFile *parser.UnitFile, service *parser.UnitFile, sapPorts []SocketActivationPortSpec, warnings *error) {
+	for _, p := range sapPorts {
+		podman.add("--publish", fmt.Sprintf("%s:%d:%d", loopbackAddr, p.InternalPort, p.ContainerPort))
+		if p.SelfLoopRemapped {
+			*warnings = errors.Join(*warnings, fmt.Errorf("SocketActivationPort: internal port auto-incremented from %d to %d to avoid proxy self-loop", max(int(p.ContainerPort), minUnprivilegedPort), p.InternalPort))
+		}
+	}
+	if !unitFile.HasKey(UnitGroup, "StopWhenUnneeded") {
+		service.Set(UnitGroup, "StopWhenUnneeded", "yes")
+	}
 }
 
 // Convert a quadlet container file (unit file with a Container group) to a systemd
@@ -1291,14 +1391,17 @@ func ConvertContainer(container *parser.UnitFile, unitsInfoMap map[string]*UnitI
 
 	handlePublishPorts(container, ContainerGroup, podman)
 
-	sapPorts, sapOptions, hasSAP, warnings, sapErr := resolveAndValidateSAP(container, ContainerGroup, warnings)
-	if sapErr != nil {
-		return nil, warnings, sapErr, nil
+	sapConfig := resolveAndValidateSAP(container, ContainerGroup, warnings)
+	if sapConfig.Error != nil {
+		return nil, sapConfig.Warnings, sapConfig.Error, nil
 	}
+	sapPorts := sapConfig.Ports
+	sapOptions := sapConfig.Options
+	sapIdleTimeout := sapConfig.IdleTimeout
+	hasSAP := sapConfig.HasSAP
+	warnings = sapConfig.Warnings
 	if hasSAP {
-		for _, p := range sapPorts {
-			podman.add("--publish", fmt.Sprintf("%s:%d:%d", loopbackAddr, p.InternalPort, p.ContainerPort))
-		}
+		applySAPPorts(podman, container, service, sapPorts, &warnings)
 		if !service.HasKey(ServiceGroup, "Restart") {
 			service.Set(ServiceGroup, "Restart", "on-failure")
 		}
@@ -1370,7 +1473,7 @@ func ConvertContainer(container *parser.UnitFile, unitsInfoMap map[string]*UnitI
 	var extras []*parser.UnitFile
 	if hasSAP {
 		var genErr, genWarn error
-		extras, genWarn, genErr = generateSAPExtras(sapPorts, sapOptions, service.Filename, container.Filename)
+		extras, genWarn, genErr = generateSAPExtras(sapPorts, sapOptions, sapIdleTimeout, service.Filename, container.Filename)
 		warnings = errors.Join(warnings, genWarn)
 		if genErr != nil {
 			return nil, warnings, genErr, nil
@@ -2093,14 +2196,17 @@ func ConvertPod(podUnit *parser.UnitFile, unitsInfoMap map[string]*UnitInfo, isU
 
 	handlePublishPorts(podUnit, PodGroup, execStartPre)
 
-	podSAPPorts, podSAPOptions, podHasSAP, warnings, podSAPErr := resolveAndValidateSAP(podUnit, PodGroup, warnings)
-	if podSAPErr != nil {
-		return nil, warnings, podSAPErr, nil
+	podSAPConfig := resolveAndValidateSAP(podUnit, PodGroup, warnings)
+	if podSAPConfig.Error != nil {
+		return nil, podSAPConfig.Warnings, podSAPConfig.Error, nil
 	}
+	podSAPPorts := podSAPConfig.Ports
+	podSAPOptions := podSAPConfig.Options
+	podSAPIdleTimeout := podSAPConfig.IdleTimeout
+	podHasSAP := podSAPConfig.HasSAP
+	warnings = podSAPConfig.Warnings
 	if podHasSAP {
-		for _, p := range podSAPPorts {
-			execStartPre.add("--publish", fmt.Sprintf("%s:%d:%d", loopbackAddr, p.InternalPort, p.ContainerPort))
-		}
+		applySAPPorts(execStartPre, podUnit, service, podSAPPorts, &warnings)
 	}
 
 	keyValKeys := map[string]string{
@@ -2157,7 +2263,7 @@ func ConvertPod(podUnit *parser.UnitFile, unitsInfoMap map[string]*UnitInfo, isU
 	var podExtras []*parser.UnitFile
 	if podHasSAP {
 		var genErr, genWarn error
-		podExtras, genWarn, genErr = generateSAPExtras(podSAPPorts, podSAPOptions, service.Filename, podUnit.Filename)
+		podExtras, genWarn, genErr = generateSAPExtras(podSAPPorts, podSAPOptions, podSAPIdleTimeout, service.Filename, podUnit.Filename)
 		warnings = errors.Join(warnings, genWarn)
 		if genErr != nil {
 			return nil, warnings, genErr, nil

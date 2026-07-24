@@ -614,6 +614,7 @@ func process() bool {
 			generatedFiles[extra.Filename] = unit.Filename
 			if err := generateServiceFile(extra); err != nil {
 				reportError(fmt.Errorf("generating extra file %s: %w", extra.Path, err))
+				continue
 			}
 			enableServiceFile(outputPath, extra)
 		}

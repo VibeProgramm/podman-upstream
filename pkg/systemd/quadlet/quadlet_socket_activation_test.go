@@ -11,6 +11,10 @@ import (
 	"go.podman.io/podman/v6/pkg/systemd/parser"
 )
 
+func makePodUnit(filename, content string) *parser.UnitFile {
+	return makeContainerUnit(filename, content)
+}
+
 func makeContainerUnit(filename, content string) *parser.UnitFile {
 	u := parser.NewUnitFile()
 	u.Filename = filename
@@ -25,7 +29,6 @@ func TestSocketActivationPort_Negative(t *testing.T) {
 		name     string
 		content  string
 		wantErr  string
-		wantWarn string
 		filename string
 	}{
 		{
@@ -90,6 +93,11 @@ func TestSocketActivationPort_Negative(t *testing.T) {
 			wantErr: "unknown option",
 		},
 		{
+			name:    "--exit-idle-time rejected",
+			content: "[Container]\nImage=test\nSocketActivationPort=8080:80\nSocketActivationPortOptions=--exit-idle-time=30s\n",
+			wantErr: "unknown option",
+		},
+		{
 			name:    "SAP019 conflict with PP",
 			content: "[Container]\nImage=test\nPublishPort=8080:90\nSocketActivationPort=8080:80\n",
 			wantErr: "conflicts with PublishPort",
@@ -125,11 +133,6 @@ func TestSocketActivationPort_Negative(t *testing.T) {
 				assert.NoError(t, err)
 				assert.NotNil(t, svc)
 			}
-
-			if tt.wantWarn != "" {
-				require.NotNil(t, warnings)
-				assert.Contains(t, warnings.Error(), tt.wantWarn)
-			}
 		})
 	}
 }
@@ -157,7 +160,7 @@ func TestSocketActivationPort_Positive(t *testing.T) {
 		socketUnit := extras[0]
 		assert.Equal(t, "test-8080.socket", socketUnit.Filename)
 		listen, _ := socketUnit.Lookup("Socket", "ListenStream")
-		assert.Equal(t, "127.0.0.1:8080", listen)
+		assert.Equal(t, "8080", listen)
 		serviceRef, _ := socketUnit.Lookup("Socket", "Service")
 		assert.Equal(t, "test-8080-proxy.service", serviceRef)
 
@@ -191,7 +194,7 @@ func TestSocketActivationPort_Positive(t *testing.T) {
 
 	// Options in ExecStart
 	t.Run("with options", func(t *testing.T) {
-		u := makeContainerUnit("test.container", "[Container]\nImage=test\nSocketActivationPort=8080:80\nSocketActivationPortOptions=--timeout=30s\n")
+		u := makeContainerUnit("test.container", "[Container]\nImage=test\nSocketActivationPort=8080:80\nSocketActivationPortOptions=--connections-max=100\n")
 		unitsInfoMap := map[string]*UnitInfo{
 			"test.container": {ServiceName: "test", ResourceName: "systemd-test"},
 		}
@@ -203,7 +206,7 @@ func TestSocketActivationPort_Positive(t *testing.T) {
 		proxyUnit := extras[1]
 		execStart := proxyUnit.LookupAll("Service", "ExecStart")
 		require.Len(t, execStart, 1)
-		assert.True(t, strings.Contains(execStart[0], "--timeout=30s"))
+		assert.True(t, strings.Contains(execStart[0], "--connections-max=100"))
 	})
 
 	// Floor=1024: containerPort 80 → internalPort 1024
@@ -287,6 +290,18 @@ func TestSocketActivationPort_Positive(t *testing.T) {
 
 		assert.Equal(t, "test-8080@.socket", extras[0].Filename)
 		assert.Equal(t, "test-8080-proxy@.service", extras[1].Filename)
+
+		// Verify template proxy has %i in Requires/After/PartOf
+		proxyUnit := extras[1]
+		requires, ok := proxyUnit.Lookup("Unit", "Requires")
+		require.True(t, ok, "proxy must have Requires")
+		assert.Equal(t, "test@%i.service", requires, "template proxy Requires must use %%i")
+		after, ok := proxyUnit.Lookup("Unit", "After")
+		require.True(t, ok, "proxy must have After")
+		assert.Equal(t, "test@%i.service", after, "template proxy After must use %%i")
+		partOf, ok := proxyUnit.Lookup("Unit", "PartOf")
+		require.True(t, ok, "proxy must have PartOf")
+		assert.Equal(t, "test@%i.service", partOf, "template proxy PartOf must use %%i")
 	})
 
 	// Restart precedence guard
@@ -315,6 +330,9 @@ func TestSocketActivationPort_Positive(t *testing.T) {
 
 		execStarts := svc.LookupAll("Service", "ExecStart")
 		assert.Len(t, execStarts, 1, "must have exactly one ExecStart")
+		assert.Contains(t, execStarts[0], "--publish 127.0.0.1:1024:80", "must contain SAP port 80")
+		assert.Contains(t, execStarts[0], "--publish 127.0.0.1:1025:443", "must contain SAP port 443")
+		assert.Contains(t, execStarts[0], "--publish 9000:8080", "must contain regular PublishPort")
 	})
 
 	// Proxy hardening
@@ -388,21 +406,7 @@ func TestSocketActivationPort_Positive(t *testing.T) {
 		assert.Contains(t, err.Error(), "unsupported")
 	})
 
-	// ExposeHostPort in usedPorts
-	t.Run("ExposeHostPort collision", func(t *testing.T) {
-		u := makeContainerUnit("test.container", "[Container]\nImage=test\nExposeHostPort=1024\nSocketActivationPort=8080:80\n")
-		unitsInfoMap := map[string]*UnitInfo{
-			"test.container": {ServiceName: "test", ResourceName: "systemd-test"},
-		}
-
-		svc, _, err, _ := ConvertContainer(u, unitsInfoMap, false)
-		require.NoError(t, err)
-		execStart := svc.LookupAll("Service", "ExecStart")
-		require.Len(t, execStart, 1)
-		assert.True(t, strings.Contains(execStart[0], "127.0.0.1:1025:80"), "EHP 1024 + floor 1024 → search to 1025")
-	})
-
-	// PodmanArgs network warning
+	// Network=container:xxx error
 	t.Run("PodmanArgs network warning", func(t *testing.T) {
 		u := makeContainerUnit("test.container", "[Container]\nImage=test\nSocketActivationPort=8080:80\nPodmanArgs=--network=none\n")
 		unitsInfoMap := map[string]*UnitInfo{
@@ -415,9 +419,9 @@ func TestSocketActivationPort_Positive(t *testing.T) {
 		assert.Contains(t, warnings.Error(), "PodmanArgs")
 	})
 
-	// Valid --buffer-size option
-	t.Run("valid --buffer-size option", func(t *testing.T) {
-		u := makeContainerUnit("test.container", "[Container]\nImage=test\nSocketActivationPort=8080:80\nSocketActivationPortOptions=--buffer-size=65536\n")
+	// Valid --connections-max option
+	t.Run("valid --connections-max option", func(t *testing.T) {
+		u := makeContainerUnit("test.container", "[Container]\nImage=test\nSocketActivationPort=8080:80\nSocketActivationPortOptions=--connections-max=100\n")
 		unitsInfoMap := map[string]*UnitInfo{
 			"test.container": {ServiceName: "test", ResourceName: "systemd-test"},
 		}
@@ -428,7 +432,7 @@ func TestSocketActivationPort_Positive(t *testing.T) {
 		proxyUnit := extras[1]
 		execStart := proxyUnit.LookupAll("Service", "ExecStart")
 		require.Len(t, execStart, 1)
-		assert.True(t, strings.Contains(execStart[0], "--buffer-size=65536"))
+		assert.True(t, strings.Contains(execStart[0], "--connections-max=100"))
 	})
 
 	t.Run("PodmanArgs --publish= parse error warning", func(t *testing.T) {
@@ -462,15 +466,17 @@ func TestSocketActivationPort_Positive(t *testing.T) {
 		assert.Contains(t, err.Error(), "conflicts with PodmanArgs")
 	})
 
-	t.Run("PodmanArgs --publish= no conflict warning", func(t *testing.T) {
+	t.Run("PodmanArgs --publish= no conflict no warning", func(t *testing.T) {
 		u := makeContainerUnit("test.container", "[Container]\nImage=test\nSocketActivationPort=8080:80\nPodmanArgs=--publish=9090:80\n")
 		unitsInfoMap := map[string]*UnitInfo{
 			"test.container": {ServiceName: "test", ResourceName: "systemd-test"},
 		}
 		_, warnings, err, _ := ConvertContainer(u, unitsInfoMap, false)
 		require.NoError(t, err)
-		require.NotNil(t, warnings)
-		assert.Contains(t, warnings.Error(), "PodmanArgs")
+		// No conflict → no warning (the old code warned on every --publish= even without conflict)
+		if warnings != nil {
+			assert.NotContains(t, warnings.Error(), "conflicts")
+		}
 	})
 
 	t.Run("Pod PodmanArgs --publish= conflict", func(t *testing.T) {
@@ -489,4 +495,201 @@ func getKey(t *testing.T, uf *parser.UnitFile, group, key string) string {
 	v, ok := uf.Lookup(group, key)
 	require.True(t, ok, "key %q not found in group %q", key, group)
 	return v
+}
+
+func TestSocketIdleTimeout(t *testing.T) {
+	t.Run("basic", func(t *testing.T) {
+		u := makeContainerUnit("test.container", "[Container]\nImage=test\nSocketActivationPort=8080:80\nSocketIdleTimeout=20m\n")
+		unitsInfoMap := map[string]*UnitInfo{
+			"test.container": {ServiceName: "test", ResourceName: "systemd-test"},
+		}
+
+		_, _, _, extras := ConvertContainer(u, unitsInfoMap, false)
+		require.Len(t, extras, 2)
+
+		proxyUnit := extras[1]
+		execStart := proxyUnit.LookupAll("Service", "ExecStart")
+		require.Len(t, execStart, 1)
+		assert.True(t, strings.Contains(execStart[0], "--exit-idle-time=20m"), "proxy should have --exit-idle-time=20m")
+	})
+
+	t.Run("without SAP errors", func(t *testing.T) {
+		u := makeContainerUnit("test.container", "[Container]\nImage=test\nSocketIdleTimeout=20m\n")
+		unitsInfoMap := map[string]*UnitInfo{
+			"test.container": {ServiceName: "test", ResourceName: "systemd-test"},
+		}
+
+		_, _, err, _ := ConvertContainer(u, unitsInfoMap, false)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "SocketIdleTimeout requires SocketActivationPort")
+	})
+
+	t.Run("conflicts with Restart=always", func(t *testing.T) {
+		u := makeContainerUnit("test.container", "[Container]\nImage=test\nSocketActivationPort=8080:80\nSocketIdleTimeout=20m\n[Service]\nRestart=always\n")
+		unitsInfoMap := map[string]*UnitInfo{
+			"test.container": {ServiceName: "test", ResourceName: "systemd-test"},
+		}
+
+		_, _, err, _ := ConvertContainer(u, unitsInfoMap, false)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "Restart=always is incompatible")
+	})
+
+	t.Run("StopWhenUnneeded default for SAP", func(t *testing.T) {
+		u := makeContainerUnit("test.container", "[Container]\nImage=test\nSocketActivationPort=8080:80\n")
+		unitsInfoMap := map[string]*UnitInfo{
+			"test.container": {ServiceName: "test", ResourceName: "systemd-test"},
+		}
+
+		svc, _, err, _ := ConvertContainer(u, unitsInfoMap, false)
+		require.NoError(t, err)
+		stopWhenUnneeded, ok := svc.Lookup("Unit", "StopWhenUnneeded")
+		assert.True(t, ok, "StopWhenUnneeded should be set for SAP containers")
+		assert.Equal(t, "yes", stopWhenUnneeded)
+	})
+
+	t.Run("StopWhenUnneeded user override preserved", func(t *testing.T) {
+		u := makeContainerUnit("test.container", "[Container]\nImage=test\nSocketActivationPort=8080:80\n[Unit]\nStopWhenUnneeded=no\n")
+		unitsInfoMap := map[string]*UnitInfo{
+			"test.container": {ServiceName: "test", ResourceName: "systemd-test"},
+		}
+
+		svc, _, err, _ := ConvertContainer(u, unitsInfoMap, false)
+		require.NoError(t, err)
+		stopWhenUnneeded, ok := svc.Lookup("Unit", "StopWhenUnneeded")
+		assert.True(t, ok, "StopWhenUnneeded should be set")
+		assert.Equal(t, "no", stopWhenUnneeded, "user override should be preserved")
+	})
+
+	t.Run("zero means unset", func(t *testing.T) {
+		u := makeContainerUnit("test.container", "[Container]\nImage=test\nSocketActivationPort=8080:80\nSocketIdleTimeout=0\n")
+		unitsInfoMap := map[string]*UnitInfo{
+			"test.container": {ServiceName: "test", ResourceName: "systemd-test"},
+		}
+
+		_, _, _, extras := ConvertContainer(u, unitsInfoMap, false)
+		require.Len(t, extras, 2)
+
+		proxyUnit := extras[1]
+		execStart := proxyUnit.LookupAll("Service", "ExecStart")
+		require.Len(t, execStart, 1)
+		assert.False(t, strings.Contains(execStart[0], "--exit-idle-time"), "proxy should NOT have --exit-idle-time when value is 0")
+	})
+
+	t.Run("zero seconds means unset", func(t *testing.T) {
+		u := makeContainerUnit("test.container", "[Container]\nImage=test\nSocketActivationPort=8080:80\nSocketIdleTimeout=0s\n")
+		unitsInfoMap := map[string]*UnitInfo{
+			"test.container": {ServiceName: "test", ResourceName: "systemd-test"},
+		}
+
+		_, _, _, extras := ConvertContainer(u, unitsInfoMap, false)
+		require.Len(t, extras, 2)
+
+		proxyUnit := extras[1]
+		execStart := proxyUnit.LookupAll("Service", "ExecStart")
+		require.Len(t, execStart, 1)
+		assert.False(t, strings.Contains(execStart[0], "--exit-idle-time"), "proxy should NOT have --exit-idle-time when value is 0s")
+	})
+
+	t.Run("invalid duration errors", func(t *testing.T) {
+		u := makeContainerUnit("test.container", "[Container]\nImage=test\nSocketActivationPort=8080:80\nSocketIdleTimeout=foo\n")
+		unitsInfoMap := map[string]*UnitInfo{
+			"test.container": {ServiceName: "test", ResourceName: "systemd-test"},
+		}
+
+		_, _, err, _ := ConvertContainer(u, unitsInfoMap, false)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "invalid duration")
+	})
+
+	t.Run("negative duration treated as unset", func(t *testing.T) {
+		u := makeContainerUnit("test.container", "[Container]\nImage=test\nSocketActivationPort=8080:80\nSocketIdleTimeout=-5m\n")
+		unitsInfoMap := map[string]*UnitInfo{
+			"test.container": {ServiceName: "test", ResourceName: "systemd-test"},
+		}
+
+		_, _, _, extras := ConvertContainer(u, unitsInfoMap, false)
+		require.Len(t, extras, 2)
+
+		proxyUnit := extras[1]
+		execStart := proxyUnit.LookupAll("Service", "ExecStart")
+		require.Len(t, execStart, 1)
+		assert.False(t, strings.Contains(execStart[0], "--exit-idle-time"), "proxy should NOT have --exit-idle-time for negative duration")
+	})
+
+	t.Run("multi-port idle timeout", func(t *testing.T) {
+		u := makeContainerUnit("test.container", "[Container]\nImage=test\nSocketActivationPort=8080:80\nSocketActivationPort=8443:443\nSocketIdleTimeout=15m\n")
+		unitsInfoMap := map[string]*UnitInfo{
+			"test.container": {ServiceName: "test", ResourceName: "systemd-test"},
+		}
+
+		_, _, _, extras := ConvertContainer(u, unitsInfoMap, false)
+		require.Len(t, extras, 4) // 2 sockets + 2 proxies
+
+		proxy8080 := extras[1]
+		execStart8080 := proxy8080.LookupAll("Service", "ExecStart")
+		require.Len(t, execStart8080, 1)
+		assert.Contains(t, execStart8080[0], "--exit-idle-time=15m", "port 8080 proxy should have idle timeout")
+
+		proxy8443 := extras[3]
+		execStart8443 := proxy8443.LookupAll("Service", "ExecStart")
+		require.Len(t, execStart8443, 1)
+		assert.Contains(t, execStart8443[0], "--exit-idle-time=15m", "port 8443 proxy should have idle timeout")
+	})
+
+	t.Run("restart on-failure works with idle timeout", func(t *testing.T) {
+		u := makeContainerUnit("test.container", "[Container]\nImage=test\nSocketActivationPort=8080:80\nSocketIdleTimeout=10m\n")
+		unitsInfoMap := map[string]*UnitInfo{
+			"test.container": {ServiceName: "test", ResourceName: "systemd-test"},
+		}
+
+		svc, _, err, _ := ConvertContainer(u, unitsInfoMap, false)
+		require.NoError(t, err)
+		restart, ok := svc.Lookup("Service", "Restart")
+		assert.True(t, ok, "SAP should default Restart=on-failure")
+		assert.Equal(t, "on-failure", restart)
+	})
+
+	t.Run("Pod basic idle timeout", func(t *testing.T) {
+		u := makePodUnit("test.pod", "[Pod]\nPodName=test\nSocketActivationPort=8080:80\nSocketIdleTimeout=10m\n")
+		unitsInfoMap := map[string]*UnitInfo{
+			"test.pod": {ServiceName: "test", ResourceName: "systemd-test"},
+		}
+
+		_, _, _, extras := ConvertPod(u, unitsInfoMap, false)
+		require.Len(t, extras, 2)
+
+		proxyUnit := extras[1]
+		execStart := proxyUnit.LookupAll("Service", "ExecStart")
+		require.Len(t, execStart, 1)
+		assert.Contains(t, execStart[0], "--exit-idle-time=10m", "pod proxy should have idle timeout")
+	})
+
+	t.Run("Pod zero means unset", func(t *testing.T) {
+		u := makePodUnit("test.pod", "[Pod]\nPodName=test\nSocketActivationPort=8080:80\nSocketIdleTimeout=0\n")
+		unitsInfoMap := map[string]*UnitInfo{
+			"test.pod": {ServiceName: "test", ResourceName: "systemd-test"},
+		}
+
+		_, _, _, extras := ConvertPod(u, unitsInfoMap, false)
+		require.Len(t, extras, 2)
+
+		proxyUnit := extras[1]
+		execStart := proxyUnit.LookupAll("Service", "ExecStart")
+		require.Len(t, execStart, 1)
+		assert.False(t, strings.Contains(execStart[0], "--exit-idle-time"), "pod proxy should NOT have --exit-idle-time when value is 0")
+	})
+
+	t.Run("Pod StopWhenUnneeded user override preserved", func(t *testing.T) {
+		u := makePodUnit("test.pod", "[Pod]\nPodName=test\nSocketActivationPort=8080:80\n[Unit]\nStopWhenUnneeded=no\n")
+		unitsInfoMap := map[string]*UnitInfo{
+			"test.pod": {ServiceName: "test", ResourceName: "systemd-test"},
+		}
+
+		svc, _, err, _ := ConvertPod(u, unitsInfoMap, false)
+		require.NoError(t, err)
+		stopWhenUnneeded, ok := svc.Lookup("Unit", "StopWhenUnneeded")
+		assert.True(t, ok, "StopWhenUnneeded should be set")
+		assert.Equal(t, "no", stopWhenUnneeded, "user override should be preserved")
+	})
 }

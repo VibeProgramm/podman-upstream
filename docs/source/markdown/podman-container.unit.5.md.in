@@ -112,6 +112,7 @@ Valid options for `[Container]` are listed below:
 | ShmSize=100m                         | --shm-size=100m                                      |
 | SocketActivationPort=8080:80         | Enable socket activation for the specified port       |
 | SocketActivationPortOptions=...      | Extra arguments passed to systemd-socket-proxyd       |
+| SocketIdleTimeout=20m                | Auto-stop proxy after idle timeout                    |
 | StartWithPod=true                    | If Pod= is defined, container is started by pod      |
 | StopSignal=SIGINT                    | --stop-signal=SIGINT                                 |
 | StopTimeout=20                       | --stop-timeout=20                                    |
@@ -350,6 +351,25 @@ Supported options: `--timeout=<seconds>`, `--buffer-size=<bytes>`, `--verbose`.
 Unknown options are rejected at generation time.
 
 Example: `SocketActivationPortOptions=--timeout=30s --verbose`
+
+### `SocketIdleTimeout=duration`
+
+Time without active TCP connections after which the proxy service stops itself, causing the container
+to be stopped via `StopWhenUnneeded=yes`.
+
+Duration format: `5m`, `1h30m`, `30s`. Requires `SocketActivationPort` to be set.
+
+**Note:** `StopWhenUnneeded=yes` has been available since systemd 205 (well within the minimum requirement of systemd 240). No additional version constraint applies.
+
+**Conflicts:**
+- `Restart=always` — container would restart after idle stop, creating an infinite restart loop
+- `--exit-idle-time` in `SocketActivationPortOptions` — use `SocketIdleTimeout` instead
+
+**Examples:**
+```
+SocketIdleTimeout=20m
+SocketIdleTimeout=1h30m
+```
 
 ### `StartWithPod=bool`
 
