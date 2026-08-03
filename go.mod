@@ -61,13 +61,13 @@ require (
 	github.com/spf13/cobra v1.10.2
 	github.com/spf13/pflag v1.0.10
 	github.com/stretchr/testify v1.11.1
-	github.com/vbauerster/mpb/v8 v8.12.1
+	github.com/vbauerster/mpb/v8 v8.13.0
 	github.com/vishvananda/netlink v1.3.1
 	go.etcd.io/bbolt v1.5.0
 	go.podman.io/buildah v1.44.1-0.20260710171501-e4b285a365f3
-	go.podman.io/common v0.68.2-0.20260710152621-629dae593a5b
-	go.podman.io/image/v5 v5.40.1-0.20260710152621-629dae593a5b
-	go.podman.io/storage v1.63.1-0.20260710152621-629dae593a5b
+	go.podman.io/common v0.68.2-0.20260717163110-b3642f3cf650
+	go.podman.io/image/v5 v5.40.1-0.20260717163110-b3642f3cf650
+	go.podman.io/storage v1.63.1-0.20260717163110-b3642f3cf650
 	golang.org/x/crypto v0.54.0
 	golang.org/x/net v0.57.0
 	golang.org/x/sync v0.22.0
@@ -148,7 +148,7 @@ require (
 	github.com/opencontainers/runc v1.5.0 // indirect
 	github.com/pkg/browser v0.0.0-20240102092130-5ac0b6a4141c // indirect
 	github.com/pkg/errors v0.9.1 // indirect
-	github.com/pkg/sftp v1.13.10 // indirect
+	github.com/pkg/sftp v1.13.11 // indirect
 	github.com/planetscale/vtprotobuf v0.6.1-0.20240319094008-0393e58bdf10 // indirect
 	github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2 // indirect
 	github.com/power-devops/perfstat v0.0.0-20240221224432-82ca36839d55 // indirect

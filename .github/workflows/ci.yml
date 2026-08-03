@@ -20,6 +20,7 @@ jobs:
   path-filter:
     runs-on: ubuntu-latest
     if: github.repository == 'podman-container-tools/podman'
+    timeout-minutes: 5
     outputs:
       all: ${{ steps.filter.outputs.all }}
       code: ${{ steps.filter.outputs.code }}
@@ -48,6 +49,8 @@ jobs:
     name: Validate source code changes
     runs-on: cncf-ubuntu-8-32-x86
     if: github.repository == 'podman-container-tools/podman'
+    # While in most cases it should faster than 10m, if there are many commits in the PR "Build each commit" takes a bit longer
+    timeout-minutes: 20
     permissions:
       pull-requests: read # For hack/ci/pr-should-include-tests to query PR labels.
     env:
@@ -186,6 +189,7 @@ jobs:
     name: Cross Build (Linux, FreeBSD)
     runs-on: cncf-ubuntu-16-64-x86
     if: github.repository == 'podman-container-tools/podman'
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
@@ -433,6 +437,7 @@ jobs:
       needs.path-filter.outputs.machine == 'true'
     name: machine linux ${{ matrix.os.arch }}
     runs-on: ${{ matrix.os.runner }}
+    timeout-minutes: 40
     strategy:
       fail-fast: false
       matrix:
@@ -725,6 +730,7 @@ jobs:
       - macos-installer
       - macos-machine
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
       - name: Check all required jobs
         run: |
