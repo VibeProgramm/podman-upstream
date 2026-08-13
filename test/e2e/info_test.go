@@ -123,19 +123,6 @@ var _ = Describe("Podman Info", func() {
 		Expect(session.OutputToString()).To(ContainSubstring("pids"))
 	})
 
-	It("Podman info: check desired runtime", func() {
-		// defined in .cirrus.yml
-		want := os.Getenv("CI_DESIRED_RUNTIME")
-		if want == "" {
-			if os.Getenv("CIRRUS_CI") == "" {
-				Skip("CI_DESIRED_RUNTIME is not set--this is OK because we're not running under Cirrus")
-			}
-			Fail("CIRRUS_CI is set, but CI_DESIRED_RUNTIME is not! See #14912")
-		}
-		session := podmanTest.PodmanExitCleanly("info", "--format", "{{.Host.OCIRuntime.Name}}")
-		Expect(session.OutputToString()).To(Equal(want))
-	})
-
 	It("Podman info: check desired network backend", func() {
 		session := podmanTest.PodmanExitCleanly("info", "--format", "{{.Host.NetworkBackend}}")
 		Expect(session.OutputToString()).To(Equal("netavark"))
@@ -222,13 +209,13 @@ var _ = Describe("Podman Info", func() {
 	})
 
 	It("Podman info: check desired storage driver", func() {
-		// defined in .cirrus.yml
+		// set by hack/ci/runner.sh
 		want := os.Getenv("CI_DESIRED_STORAGE")
 		if want == "" {
-			if os.Getenv("CIRRUS_CI") == "" {
-				Skip("CI_DESIRED_STORAGE is not set--this is OK because we're not running under Cirrus")
+			if os.Getenv("PODMAN_CI") == "" {
+				Skip("CI_DESIRED_STORAGE is not set--this is OK because we're not running in podman CI")
 			}
-			Fail("CIRRUS_CI is set, but CI_DESIRED_STORAGE is not! See #20161")
+			Fail("PODMAN_CI is set, but CI_DESIRED_STORAGE is not! See #20161")
 		}
 		session := podmanTest.PodmanExitCleanly("info", "--format", "{{.Store.GraphDriverName}}")
 		Expect(session.OutputToString()).To(Equal(want), ".Store.GraphDriverName from podman info")
@@ -242,6 +229,21 @@ var _ = Describe("Podman Info", func() {
 			session = podmanTest.PodmanExitCleanly("info", "--format", `{{index .Store.GraphOptions "overlay.use_composefs"}}`)
 			Expect(session.OutputToString()).To(Equal(expect), ".Store.GraphOptions -> overlay.use_composefs")
 		}
+	})
+
+	It("Podman info: check host.memAvailable is sane", func() {
+		session := podmanTest.PodmanExitCleanly("info", "--format", "{{.Host.MemTotal}} {{.Host.MemAvailable}}")
+		var total, avail int64
+		_, err := fmt.Sscanf(session.OutputToString(), "%d %d", &total, &avail)
+		Expect(err).ToNot(HaveOccurred())
+
+		// On Linux, MemAvailable must always be reported; -1 is the
+		// sentinel used on platforms where the kernel doesn't expose
+		// this value.
+		Expect(avail).To(BeNumerically(">=", 0), "MemAvailable is supported (not the -1 'unknown' sentinel)")
+
+		// MemAvailable (reclaimable memory included) can never exceed MemTotal.
+		Expect(avail).To(BeNumerically("<=", total), "MemAvailable does not exceed MemTotal")
 	})
 
 	It("Podman info: check lock count", Serial, func() {

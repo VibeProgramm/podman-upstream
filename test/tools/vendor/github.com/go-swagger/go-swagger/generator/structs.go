@@ -61,8 +61,9 @@ type GenSchema struct {
 	resolvedType
 	sharedValidations
 
-	Example                    string
-	OriginalName               string
+	Example                    string // OriginalName is the wire/JSON property key from the spec.
+	OriginalName               string // Name is the resolved logical name (may come from x-go-name via goName()).
+	GoName                     string // GoName is the final exported Go identifier used in generated code.
 	Name                       string
 	Suffix                     string
 	Path                       string
@@ -102,6 +103,7 @@ type GenSchema struct {
 	IncludeModel               bool
 	Default                    any
 	WantsMarshalBinary         bool // do we generate MarshalBinary interface?
+	WantsStringer              bool // do we generate the fmt.Stringer String() method?
 	StructTags                 []string
 	ExtraImports               map[string]string // non-standard imports detected when using external types
 	ExternalDocs               *spec.ExternalDocumentation
@@ -168,6 +170,16 @@ func (g GenSchema) PrintTags() string {
 			valuesHaveBacktick = true
 			break
 		}
+	}
+
+	// Input sanitization: g.CustomTag (the x-go-custom-tag extension) is appended raw and
+	// may either generate scrambled code or worse, be attacker-controllable from an untrusted spec.
+	//
+	// A backtick in the custom tag could close the raw literal and inject arbitrary Go declarations
+	// into the generated struct. strconv.Quote neutralises the breakout while leaving legitimate custom tags
+	// rendered as before.
+	if !valuesHaveBacktick && !strconv.CanBackquote(g.CustomTag) {
+		valuesHaveBacktick = true
 	}
 
 	if !valuesHaveBacktick {
@@ -299,6 +311,7 @@ type GenHeader struct {
 	IndexVar     string
 
 	ID              string
+	GoName          string // GoName is the exported Go identifier used in generated code.
 	Name            string
 	Path            string
 	ValueExpression string
@@ -356,6 +369,7 @@ type GenParameter struct {
 	sharedValidations
 
 	ID              string
+	GoName          string // GoName is the exported Go identifier used in generated code.
 	Name            string
 	ModelsPackage   string
 	Path            string
@@ -416,7 +430,7 @@ func (g *GenParameter) IsPathParam() bool {
 
 // IsFormParam returns true when this parameter is a form param.
 func (g *GenParameter) IsFormParam() bool {
-	return g.Location == "formData"
+	return g.Location == formData
 }
 
 // IsHeaderParam returns true when this parameter is a header param.
@@ -569,7 +583,7 @@ func (g GenStatusCodeResponses) MarshalJSON() ([]byte, error) {
 		if i > 0 {
 			buf.WriteRune(',')
 		}
-		buf.WriteString(fmt.Sprintf("%q:", strconv.Itoa(v.Code)))
+		fmt.Fprintf(&buf, "%q:", strconv.Itoa(v.Code))
 		buf.Write(rb)
 	}
 	buf.WriteRune('}')
@@ -645,6 +659,7 @@ type GenOperation struct {
 	ProducesMediaTypes   []string
 	ConsumesMediaTypes   []string
 	TimeoutName          string
+	ContextName          string
 
 	Extensions map[string]any
 
@@ -738,9 +753,15 @@ func (g *GenApp) UseModernMode() bool {
 // GenSerGroups sorted representation of serializer groups.
 type GenSerGroups []GenSerGroup
 
-func (g GenSerGroups) Len() int           { return len(g) }
-func (g GenSerGroups) Swap(i, j int)      { g[i], g[j] = g[j], g[i] }
-func (g GenSerGroups) Less(i, j int) bool { return g[i].Name < g[j].Name }
+func (g GenSerGroups) Len() int      { return len(g) }
+func (g GenSerGroups) Swap(i, j int) { g[i], g[j] = g[j], g[i] }
+func (g GenSerGroups) Less(i, j int) bool {
+	if g[i].Name == g[j].Name {
+		return g[i].MediaType < g[j].MediaType
+	}
+
+	return g[i].Name < g[j].Name
+}
 
 // NumSerializers yields the total number of serializer entries in this group.
 func (g GenSerGroups) NumSerializers() int {

@@ -5,7 +5,6 @@ package libpod
 import (
 	"bufio"
 	"bytes"
-	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -596,7 +595,7 @@ func (r *ConmonOCIRuntime) HTTPAttach(ctr *Container, req *http.Request, w http.
 			}
 			errChan <- err
 		}()
-		if err := ctr.ReadLog(context.Background(), logOpts, logChan, 0); err != nil {
+		if err := ctr.ReadLog(req.Context(), logOpts, logChan, 0); err != nil {
 			return err
 		}
 		go func() {

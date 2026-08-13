@@ -282,7 +282,7 @@ func (h HyperVStubber) MountVolumesToVM(mc *vmconfigs.MachineConfig, _ bool) err
 
 	err = fsCmd.Start()
 	if err != nil {
-		return fmt.Errorf("unable to start 9p server: %v", err)
+		return fmt.Errorf("unable to start 9p server: %w", err)
 	}
 	logrus.Infof("Started podman 9p server as PID %d", fsCmd.Process.Pid)
 

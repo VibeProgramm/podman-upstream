@@ -14,6 +14,7 @@ import (
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	"github.com/opencontainers/selinux/go-selinux"
 	v1 "go.podman.io/podman/v6/pkg/k8s.io/api/core/v1"
 	"go.podman.io/podman/v6/pkg/util"
 	. "go.podman.io/podman/v6/test/utils"
@@ -59,6 +60,37 @@ var _ = Describe("Podman kube generate", func() {
 			numContainers++
 		}
 		Expect(numContainers).To(Equal(1))
+	})
+
+	It("on container with volume emits SELinux note only when rootless and SELinux enabled", func() {
+		vol1 := filepath.Join(podmanTest.TempDir, "vol-selinux-note")
+		err := os.MkdirAll(vol1, 0o755)
+		Expect(err).ToNot(HaveOccurred())
+
+		ctrName := "test-selinux-note-ctr"
+		session := podmanTest.Podman([]string{"run", "-d", "--name", ctrName, "-v", vol1 + ":/volume/:z", CITEST_IMAGE, "top"})
+		session.WaitWithDefaultTimeout()
+		Expect(session).Should(ExitCleanly())
+
+		outputFile := filepath.Join(podmanTest.RunRoot, "ctr.yaml")
+		kube := podmanTest.Podman([]string{"kube", "generate", ctrName, "-f", outputFile})
+		kube.WaitWithDefaultTimeout()
+		Expect(kube).Should(ExitCleanly())
+
+		b, err := os.ReadFile(outputFile)
+		Expect(err).ShouldNot(HaveOccurred())
+
+		// The SELinux volume-permissions NOTE only applies to unprivileged,
+		// rootless containers on an SELinux-enabled host.
+		if isRootless() && selinux.GetEnabled() {
+			Expect(string(b)).To(ContainSubstring("check the podman generate kube man page"))
+		} else {
+			Expect(string(b)).NotTo(ContainSubstring("check the podman generate kube man page"))
+		}
+
+		rm := podmanTest.Podman([]string{"rm", "-t", "0", "-f", ctrName})
+		rm.WaitWithDefaultTimeout()
+		Expect(rm).Should(ExitCleanly())
 	})
 
 	It("service on container with --security-opt level", func() {

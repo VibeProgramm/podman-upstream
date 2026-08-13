@@ -371,6 +371,11 @@ func StartSystemExec(command string, args []string) *PodmanSession {
 // be skipped as it's considered to be the header.
 func tagOutputToMap(imagesOutput []string) map[string]map[string]bool {
 	m := make(map[string]map[string]bool)
+	// imagesOutput[1:] panics (slice bounds out of range) when imagesOutput
+	// is empty, since there is no header line to skip in that case.
+	if len(imagesOutput) == 0 {
+		return m
+	}
 	// iterate over output but skip the header
 	for _, i := range imagesOutput[1:] {
 		tmp := []string{}

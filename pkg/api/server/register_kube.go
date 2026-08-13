@@ -135,6 +135,15 @@ func (s *APIServer) registerKubeHandlers(r *mux.Router) error {
 	//    type: string
 	//    description: Set the user namespace mode for the pods.
 	//  - in: query
+	//    name: validate
+	//    type: string
+	//    default: ignore
+	//    enum: [ignore, warn, strict]
+	//    description: |
+	//      How to handle unrecognized YAML fields and unsupported objects. "ignore" skips them,
+	//      "warn" returns them in the ValidationWarnings field of the response, and "strict"
+	//      fails the request. An empty value is treated as "ignore".
+	//  - in: query
 	//    name: wait
 	//    type: boolean
 	//    default: false
@@ -153,6 +162,8 @@ func (s *APIServer) registerKubeHandlers(r *mux.Router) error {
 	// responses:
 	//   200:
 	//     $ref: "#/responses/playKubeResponseLibpod"
+	//   400:
+	//     $ref: "#/responses/badParamError"
 	//   500:
 	//     $ref: "#/responses/internalError"
 	r.HandleFunc(VersionedPath("/libpod/play/kube"), s.APIHandler(libpod.PlayKube)).Methods(http.MethodPost)

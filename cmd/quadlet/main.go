@@ -5,7 +5,6 @@ import (
 	"flag"
 	"fmt"
 	"os"
-	"path"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -106,7 +105,7 @@ func loadUnitsFromDir(sourcePath string) ([]*parser.UnitFile, error) {
 	for _, file := range files {
 		name := file.Name()
 		if _, ok := seen[name]; !ok && quadlet.IsExtSupported(name) {
-			path := path.Join(sourcePath, name)
+			path := filepath.Join(sourcePath, name)
 
 			Debugf("Loading source unit file %s", path)
 
@@ -140,7 +139,7 @@ func loadUnitDropins(unit *parser.UnitFile, sourcePaths []string) error {
 	dropinDirs := make([]string, 0, len(unitDropinPaths))
 	for _, dropinPath := range unitDropinPaths {
 		for _, sourcePath := range sourcePaths {
-			dropinDirs = append(dropinDirs, path.Join(sourcePath, dropinPath))
+			dropinDirs = append(dropinDirs, filepath.Join(sourcePath, dropinPath))
 		}
 	}
 
@@ -165,7 +164,7 @@ func loadUnitDropins(unit *parser.UnitFile, sourcePaths []string) error {
 				continue // We already saw this name
 			}
 
-			dropinPaths[dropinName] = path.Join(dropinDir, dropinName)
+			dropinPaths[dropinName] = filepath.Join(dropinDir, dropinName)
 		}
 	}
 
@@ -264,14 +263,14 @@ func enableServiceFile(outputPath string, service *parser.UnitFile) {
 	}
 
 	for _, symlinkRel := range symlinks {
-		target, err := filepath.Rel(path.Dir(symlinkRel), service.Filename)
+		target, err := filepath.Rel(filepath.Dir(symlinkRel), service.Filename)
 		if err != nil {
 			Logf("Can't create symlink %s: %s", symlinkRel, err)
 			continue
 		}
-		symlinkPath := path.Join(outputPath, symlinkRel)
+		symlinkPath := filepath.Join(outputPath, symlinkRel)
 
-		symlinkDir := path.Dir(symlinkPath)
+		symlinkDir := filepath.Dir(symlinkPath)
 		err = os.MkdirAll(symlinkDir, os.ModePerm)
 		if err != nil {
 			Logf("Can't create dir %s: %s", symlinkDir, err)
@@ -441,7 +440,7 @@ func main() {
 func process() bool {
 	var processErred bool
 
-	prgname := path.Base(os.Args[0])
+	prgname := filepath.Base(os.Args[0])
 	isUserFlag = strings.Contains(prgname, "user")
 
 	flag.Parse()
@@ -570,7 +569,7 @@ func process() bool {
 			continue
 		}
 
-		service.Path = path.Join(outputPath, service.Filename)
+		service.Path = filepath.Join(outputPath, service.Filename)
 
 		if prevUnit, exists := generatedFiles[service.Filename]; exists {
 			reportError(fmt.Errorf("generated file %q would overwrite file from %q — duplicate service name", service.Filename, prevUnit))
@@ -586,7 +585,7 @@ func process() bool {
 			}
 			fmt.Printf("---%s---\n%s\n", service.Path, data)
 			for _, extra := range extras {
-				extra.Path = path.Join(outputPath, extra.Filename)
+				extra.Path = filepath.Join(outputPath, extra.Filename)
 				if prevUnit, exists := generatedFiles[extra.Filename]; exists {
 					reportError(fmt.Errorf("generated file %q would overwrite file from %q — duplicate socket/proxy name", extra.Filename, prevUnit))
 					continue
@@ -606,7 +605,7 @@ func process() bool {
 		}
 		enableServiceFile(outputPath, service)
 		for _, extra := range extras {
-			extra.Path = path.Join(outputPath, extra.Filename)
+			extra.Path = filepath.Join(outputPath, extra.Filename)
 			if prevUnit, exists := generatedFiles[extra.Filename]; exists {
 				reportError(fmt.Errorf("generated file %q would overwrite file from %q — duplicate socket/proxy name", extra.Filename, prevUnit))
 				continue

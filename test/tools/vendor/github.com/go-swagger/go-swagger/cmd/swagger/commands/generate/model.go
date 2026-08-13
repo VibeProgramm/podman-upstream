@@ -19,6 +19,7 @@ type modelOptions struct {
 	AllDefinitions             bool     `description:"generate all model definitions regardless of usage in operations"                                      hidden:"deprecated"                          long:"all-definitions"`
 	StructTags                 []string `description:"the struct tags to generate, repeat for multiple (defaults to json)"                                   long:"struct-tags"`
 	RootedErrorPath            bool     `description:"extends validation errors with the type name instead of an empty path, in the case of arrays and maps" long:"rooted-error-path"`
+	WithStringer               bool     `description:"generate a fmt.Stringer String() method on models, rendering field values as JSON (see issue #872)"    long:"with-stringer"`
 }
 
 func (mo modelOptions) apply(opts *generator.GenOpts) {
@@ -30,6 +31,7 @@ func (mo modelOptions) apply(opts *generator.GenOpts) {
 	opts.IgnoreOperations = mo.AllDefinitions
 	opts.StructTags = mo.StructTags
 	opts.WantsRootedErrorPath = mo.RootedErrorPath
+	opts.WantsStringer = mo.WithStringer
 }
 
 // WithModels adds the model options group.
@@ -73,17 +75,10 @@ func (m Model) apply(opts *generator.GenOpts) {
 	opts.AcceptDefinitionsOnly = m.AcceptDefinitionsOnly
 }
 
-func (m Model) log(_ string) {
-	log.Println(`Generation completed!
-
-For this generation to compile you need to have some packages in your go.mod:
-
-	* github.com/go-openapi/validate
-	* github.com/go-openapi/strfmt
-
-You can get these now with: go mod tidy`)
-}
-
 func (m *Model) generate(opts *generator.GenOpts) error {
 	return generator.GenerateModels(append(m.Name, m.Models.Models...), opts)
+}
+
+func (m Model) log(_ string) {
+	noticeImports()
 }

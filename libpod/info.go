@@ -122,6 +122,7 @@ func (r *Runtime) hostInfo() (*define.HostInfo, error) {
 		Hostname:              host,
 		Kernel:                kv,
 		MemFree:               mi.MemFree,
+		MemAvailable:          mi.MemAvailable,
 		MemTotal:              mi.MemTotal,
 		NetworkBackend:        r.config.Network.NetworkBackend,
 		NetworkBackendInfo:    r.network.NetworkInfo(),

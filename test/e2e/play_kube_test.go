@@ -1896,9 +1896,9 @@ func withReplicas(replicas int32) deploymentOption {
 	}
 }
 
-// getPodNameInDeployment returns the Pod object
+// getPodNameInDaemonSet returns the Pod object
 // with just its name set, so that it can be passed around
-// and into getCtrNameInPod for ease of testing
+// and into getCtrNameInPod for ease of testing.
 func getPodNameInDaemonSet(d *DaemonSet) Pod {
 	p := Pod{}
 	p.Name = fmt.Sprintf("%s-pod", d.Name)
@@ -2658,6 +2658,120 @@ var _ = Describe("Podman kube play", func() {
 		kube := podmanTest.Podman([]string{"kube", "play", kubeYaml})
 		kube.WaitWithDefaultTimeout()
 		Expect(kube).Should(ExitWithError(125, `container "podDoesntHaveAnImage" is missing the required 'image' field`))
+	})
+
+	yamlWithUnknownField := fmt.Sprintf(`
+apiVersion: v1
+kind: Pod
+metadata:
+  name: unknown-field-pod
+spec:
+  containers:
+  - name: testctr
+    image: %s
+    command:
+    - "true"
+    bogusfield: "value"
+`, CITEST_IMAGE)
+
+	// A BogusKind document followed by a valid Pod: strict fails on the
+	// unsupported kind, while ignore/warn skip it and still run the Pod.
+	yamlWithUnknownKind := fmt.Sprintf(`
+apiVersion: v1
+kind: BogusKind
+metadata:
+  name: unknown-kind
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: unknown-kind-pod
+spec:
+  containers:
+  - name: testctr
+    image: %s
+    command:
+    - "true"
+`, CITEST_IMAGE)
+
+	It("--validate=ignore skips unrecognized YAML fields (default)", func() {
+		err := writeYaml(yamlWithUnknownField, kubeYaml)
+		Expect(err).ToNot(HaveOccurred())
+
+		// ExitCleanly also asserts nothing is written to stderr, i.e. no warning.
+		podmanTest.PodmanExitCleanly("kube", "play", kubeYaml)
+	})
+
+	It("--validate=strict fails on unrecognized YAML fields", func() {
+		err := writeYaml(yamlWithUnknownField, kubeYaml)
+		Expect(err).ToNot(HaveOccurred())
+
+		kube := podmanTest.Podman([]string{"kube", "play", "--validate=strict", kubeYaml})
+		kube.WaitWithDefaultTimeout()
+		Expect(kube).Should(ExitWithError(125, "bogusfield"))
+	})
+
+	It("--validate=warn reports unrecognized YAML fields but keeps running", func() {
+		err := writeYaml(yamlWithUnknownField, kubeYaml)
+		Expect(err).ToNot(HaveOccurred())
+
+		kube := podmanTest.Podman([]string{"kube", "play", "--validate=warn", kubeYaml})
+		kube.WaitWithDefaultTimeout()
+		Expect(kube).Should(Exit(0))
+		Expect(kube.ErrorToString()).To(ContainSubstring("bogusfield"))
+	})
+
+	It("--validate=ignore skips unsupported kube kinds (default)", func() {
+		err := writeYaml(yamlWithUnknownKind, kubeYaml)
+		Expect(err).ToNot(HaveOccurred())
+
+		// ExitCleanly also asserts nothing is written to stderr, i.e. no warning.
+		podmanTest.PodmanExitCleanly("kube", "play", kubeYaml)
+	})
+
+	It("--validate=warn reports unsupported kube kinds but keeps running", func() {
+		err := writeYaml(yamlWithUnknownKind, kubeYaml)
+		Expect(err).ToNot(HaveOccurred())
+
+		kube := podmanTest.Podman([]string{"kube", "play", "--validate=warn", kubeYaml})
+		kube.WaitWithDefaultTimeout()
+		Expect(kube).Should(Exit(0))
+		Expect(kube.ErrorToString()).To(ContainSubstring("BogusKind"))
+	})
+
+	It("--validate=strict fails on unsupported kube kinds", func() {
+		err := writeYaml(yamlWithUnknownKind, kubeYaml)
+		Expect(err).ToNot(HaveOccurred())
+
+		kube := podmanTest.Podman([]string{"kube", "play", "--validate=strict", kubeYaml})
+		kube.WaitWithDefaultTimeout()
+		Expect(kube).Should(ExitWithError(125, `kube kind "BogusKind" is not supported`))
+	})
+
+	It("--validate=strict accepts a valid manifest", func() {
+		validYaml := fmt.Sprintf(`
+apiVersion: v1
+kind: Pod
+metadata:
+  name: valid-pod
+spec:
+  containers:
+  - name: testctr
+    image: %s
+    command:
+    - "true"
+`, CITEST_IMAGE)
+		err := writeYaml(validYaml, kubeYaml)
+		Expect(err).ToNot(HaveOccurred())
+
+		podmanTest.PodmanExitCleanly("kube", "play", "--validate=strict", kubeYaml)
+	})
+
+	It("rejects an invalid --validate value", func() {
+		// The value is rejected at flag-parse time, before any file is read.
+		kube := podmanTest.Podman([]string{"kube", "play", "--validate=bogus", kubeYaml})
+		kube.WaitWithDefaultTimeout()
+		Expect(kube).Should(ExitWithError(125, "not a valid value"))
 	})
 
 	It("container start error identifies the container by name", func() {

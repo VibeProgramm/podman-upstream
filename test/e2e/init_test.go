@@ -4,6 +4,8 @@ package integration
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -117,5 +119,32 @@ var _ = Describe("Podman init", func() {
 		init := podmanTest.Podman([]string{"init", "init_test"})
 		init.WaitWithDefaultTimeout()
 		Expect(init).Should(ExitWithError(125, fmt.Sprintf("Error: container %s has already been created in runtime: container state improper", cid)))
+	})
+
+	It("podman init cleans up after initialization failure", func() {
+		SkipIfRemote("requires local containers.conf configuration")
+
+		confPath := filepath.Join(podmanTest.TempDir, "containers.conf")
+		err := os.WriteFile(confPath, []byte("[containers]\nhost_containers_internal_ip = \"none\"\n"), 0o644)
+		Expect(err).ToNot(HaveOccurred())
+
+		err = os.Setenv("CONTAINERS_CONF_OVERRIDE", confPath)
+		Expect(err).ToNot(HaveOccurred())
+
+		name := "init-failure-cleanup"
+
+		podmanTest.PodmanExitCleanly("create", "--name", name, "--add-host", "host.docker.internal:host-gateway", ALPINE, "top")
+
+		init := podmanTest.Podman([]string{"init", name})
+		init.WaitWithDefaultTimeout()
+		Expect(init).Should(ExitWithError(125, "host containers internal IP address is empty"))
+
+		inspect := podmanTest.PodmanExitCleanly("inspect", "--format", "{{.State.Status}}", name)
+		Expect(inspect.OutputToString()).To(Equal("created"))
+
+		// Verify that start retries initialization instead of starting a partially initialized container.
+		start := podmanTest.Podman([]string{"start", name})
+		start.WaitWithDefaultTimeout()
+		Expect(start).Should(ExitWithError(125, "host containers internal IP address is empty"))
 	})
 })

@@ -243,6 +243,10 @@ func CreateInit(c *cobra.Command, vals entities.ContainerCreateOptions, isInfra 
 		logrus.Warnf("The --kernel-memory flag is no longer supported. This flag is a noop.")
 	}
 
+	if c.Flag("image-volume") != nil && c.Flag("image-volume").Changed && c.Flag("image-volume").Value.String() == "bind" {
+		logrus.Warnf("The --image-volume=bind value is deprecated, use --image-volume=anonymous instead")
+	}
+
 	if cliVals.LogDriver == define.PassthroughLogging {
 		if term.IsTerminal(0) || term.IsTerminal(1) || term.IsTerminal(2) {
 			return vals, errors.New("the '--log-driver passthrough' option cannot be used on a TTY.  If you really want it, use '--log-driver passthrough-tty'")

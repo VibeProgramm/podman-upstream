@@ -351,8 +351,8 @@ func PodmanTestCreateUtil(tempDir string, target PodmanTestCreateUtilTarget) *Po
 	}
 
 	storageOptions := STORAGE_OPTIONS
-	if os.Getenv("STORAGE_FS") != "" {
-		storageFs = os.Getenv("STORAGE_FS")
+	if os.Getenv("CI_DESIRED_STORAGE") != "" {
+		storageFs = os.Getenv("CI_DESIRED_STORAGE")
 		storageOptions = "--storage-driver " + storageFs
 
 		// Look for STORAGE_OPTIONS_OVERLAY / STORAGE_OPTIONS_VFS
@@ -998,7 +998,7 @@ func (s *PodmanSessionIntegration) InspectPodToJSON() define.InspectPodData {
 	return i[0]
 }
 
-// InspectPodToJSON takes the sessions output from an inspect and returns json
+// InspectPodArrToJSON takes the session's inspect output and returns JSON-decoded pod data.
 func (s *PodmanSessionIntegration) InspectPodArrToJSON() []define.InspectPodData {
 	var i []define.InspectPodData
 	err := jsoniter.Unmarshal(s.Out.Contents(), &i)
@@ -1097,6 +1097,15 @@ func SkipIfNotRootless(reason string) {
 	checkReason(reason)
 	if !isRootless() {
 		Skip("[notRootless]: " + reason)
+	}
+}
+
+func SkipIfNoIPv6Route(reason string) {
+	GinkgoHelper()
+	checkReason(reason)
+	out, err := exec.Command("ip", "-6", "route", "show", "default").Output()
+	if err != nil || len(strings.TrimSpace(string(out))) == 0 {
+		Skip("[noIPv6Route]: " + reason)
 	}
 }
 
@@ -1829,4 +1838,30 @@ func SkipIfNotAMD64() {
 	if runtime.GOARCH != "amd64" {
 		Skip("test only valid on amd64")
 	}
+}
+
+const policyContent = `{
+    "default": [
+        {
+            "type": "insecureAcceptAnything"
+        }
+    ],
+    "transports":
+        {
+            "docker-daemon":
+                {
+                    "": [{"type":"insecureAcceptAnything"}]
+                }
+        }
+}
+`
+
+// createPolicyJSONFile creates a policy.json file in podmanTest.TempDir with an
+// insecureAcceptAnything policy and returns the path to that file.
+func createPolicyJSONFile() string {
+	GinkgoHelper()
+	path := filepath.Join(podmanTest.TempDir, "policy.json")
+	err := os.WriteFile(path, []byte(policyContent), 0o600)
+	Expect(err).ToNot(HaveOccurred())
+	return path
 }

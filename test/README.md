@@ -232,3 +232,45 @@ For usage run:
 ```
 hack/bats --help
 ```
+
+## Reproducing CI failures locally with Lima
+
+CI jobs whose names end in `/ lima` run inside a Lima VM. To reproduce one,
+copy the job name before `/ lima` and pass it to `hack/ci/ci.sh`:
+
+```bash
+hack/ci/ci.sh TEST MODE PRIV DISTRO
+```
+
+For example, `sys remote rootless fedora-current / lima` becomes:
+
+```bash
+hack/ci/ci.sh sys remote rootless fedora-current
+```
+
+Jobs without the `/ lima` suffix cannot be reproduced this way, including
+machine tests and Windows and macOS jobs.
+
+`TEST` is the suite, one of:
+
+- `build` builds Podman and its documentation
+- `apiv2` runs API v2 tests
+- `bindings` runs bindings tests
+- `bud` runs Buildah bud tests
+- `compose_v2` runs Docker Compose v2 tests
+- `docker_py` runs Docker SDK for Python tests
+- `unit` runs unit tests
+- `upgrade` runs upgrade tests
+- `int` runs integration tests
+- `sys` runs system tests
+
+`MODE` is `local` or `remote` and defaults to `local`. `PRIV` is `root` or
+`rootless` and defaults to `rootless`. `DISTRO` is `fedora-current`,
+`fedora-prior`, `fedora-rawhide`, or `debian-sid`.
+
+For the `upgrade` suite, `MODE` is the version to upgrade from (for example,
+`v5.3.1`) instead of `local` or `remote`.
+
+The script requires [Lima](https://lima-vm.io/docs/installation/). It starts a
+nested-virtualization VM with 8 GB of memory, copies this repository into it,
+and runs `hack/ci/runner.sh`, so the host distribution does not matter.

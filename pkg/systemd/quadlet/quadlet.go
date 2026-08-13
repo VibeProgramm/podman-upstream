@@ -201,6 +201,7 @@ const (
 	KeyUID                         = "UID"
 	KeyUIDMap                      = "UIDMap"
 	KeyUlimit                      = "Ulimit"
+	KeyUmask                       = "Umask"
 	KeyUnmask                      = "Unmask"
 	KeyUser                        = "User"
 	KeyUserNS                      = "UserNS"
@@ -355,6 +356,7 @@ var (
 				KeyTmpfs:                       true,
 				KeyUIDMap:                      true,
 				KeyUlimit:                      true,
+				KeyUmask:                       true,
 				KeyUnmask:                      true,
 				KeyUser:                        true,
 				KeyUserNS:                      true,
@@ -1219,6 +1221,7 @@ func ConvertContainer(container *parser.UnitFile, unitsInfoMap map[string]*UnitI
 		KeyRetry:       "--retry",
 		KeyRetryDelay:  "--retry-delay",
 		KeyImageVolume: "--image-volume",
+		KeyUmask:       "--umask",
 	}
 	lookupAndAddString(container, ContainerGroup, stringKeys, podman)
 
@@ -2763,6 +2766,10 @@ func createBasePodmanCommand(unitFile *parser.UnitFile, groupName string) *Podma
 func handlePod(quadletUnitFile, serviceUnitFile *parser.UnitFile, groupName string, unitsInfoMap map[string]*UnitInfo, podman *PodmanCmdline) error {
 	pod, ok := quadletUnitFile.Lookup(groupName, KeyPod)
 	if ok && len(pod) > 0 {
+		// XXX: only %N is handled.
+		// it is difficult to properly implement specifiers handling without consulting systemd.
+		pod = strings.ReplaceAll(pod, "%N", GetContainerServiceName(quadletUnitFile))
+
 		if !strings.HasSuffix(pod, ".pod") {
 			return fmt.Errorf("pod %s is not Quadlet based", pod)
 		}

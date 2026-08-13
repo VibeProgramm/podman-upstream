@@ -66,14 +66,14 @@ and other data will be preserved." />
 				Action="SetCONFDIR_User"
 				Value="[AppDataFolder]containers\containers.conf.d"
 				Before="AppSearch"
-				Condition="MSIINSTALLPERUSER=1 AND NOT IS_UPGRADE"
+				Condition="MSIINSTALLPERUSER=1"
 				Sequence="first" />
 
 		<SetProperty Id="CONFDIR"
 				Action="SetCONFDIR_Machine"
 				Value="[CommonAppDataFolder]containers\containers.conf.d"
 				Before="AppSearch"
-				Condition="ALLUSERS=1 AND NOT MSIINSTALLPERUSER=1 AND NOT IS_UPGRADE"
+				Condition="ALLUSERS=1 AND NOT MSIINSTALLPERUSER=1"
 				Sequence="first" />
 
 		<!--
@@ -81,6 +81,7 @@ and other data will be preserved." />
 			The machine provider config file is created (or is not deleted if it already exist) if these conditions are met:
 				- The user hasn't set property `SKIP_CONFIG_FILE_CREATION` to 1
 				- The main executable file (<PFILESDIR>/Podman/podman.exe) doesn't exist or, if it exists, the machine provider config file exists
+			Note: if the podman.exe exists AND the config file exists we must set to 1 or the installer deletes the existing config file ¯\_(ツ)_/¯
 		-->
 		<SetProperty Id="CREATE_MACHINE_PROVIDER_CONFIG_FILE"
 			After="AppSearch"

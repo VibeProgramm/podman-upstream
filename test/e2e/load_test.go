@@ -85,7 +85,7 @@ var _ = Describe("Podman load", func() {
 		rmi.WaitWithDefaultTimeout()
 		Expect(rmi).Should(ExitCleanly())
 
-		result := podmanTest.Podman([]string{"load", "-q", "--signature-policy", "/etc/containers/policy.json", "-i", outfile})
+		result := podmanTest.Podman([]string{"load", "-q", "--signature-policy", createPolicyJSONFile(), "-i", outfile})
 		result.WaitWithDefaultTimeout()
 		if IsRemote() {
 			Expect(result).To(ExitWithError(125, "unknown flag: --signature-policy"))

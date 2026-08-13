@@ -20,7 +20,10 @@ manually by creating a custom route using `--route`.
 Additionally the `bridge` driver supports the following options:
 
 - `vlan`: This option assigns a VLAN tag and enables vlan\_filtering. Defaults to none.
-- `isolate`: This option isolates networks by blocking traffic between those that have this option enabled.
+- `isolate`: This option isolates bridge networks from other bridge networks. Must be set as `isolate=<value>` (a value is required; bare `isolate` is invalid). Defaults to `strict`. Supported values:
+  - `strict`: Block traffic to and from all other bridge networks. This is the default when the option is omitted.
+  - `true`: Block traffic only between networks that also have isolation enabled (`true` or `strict`).
+  - `false`: Do not isolate the network; allow traffic to other bridge networks. Use this to restore the pre-Podman 6 / Netavark 2 behavior.
 - `com.docker.network.bridge.name`: This option assigns the given name to the created Linux Bridge
 - `com.docker.network.driver.mtu`: Sets the Maximum Transmission Unit (MTU) and takes an integer value.
 - `vrf`: This option assigns a Virtual Routing and Forwarding (VRF) routing table to the bridge interface. It accepts the VRF name and defaults to none. Can only be used with the Netavark network backend.

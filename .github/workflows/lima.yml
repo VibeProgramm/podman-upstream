@@ -32,7 +32,11 @@ env:
   # CI automation repo release for the VM image downloads in ci.sh.
   # ENV is managed by renovate, do not change the name without
   # updating the renovate config in the automation repo.
-  AUTOMATION_RELEASE: 20260616t073924z
+  AUTOMATION_RELEASE: 20260811t132028z
+  # Needed for logformatter
+  PR_NUMBER: ${{ github.event.pull_request.number || '' }}
+  PR_TITLE: ${{ github.event.pull_request.title || ''  }}
+  GITHUB_RUN_ID: ${{ github.run_id }}
 
 jobs:
   lima:
@@ -42,7 +46,7 @@ jobs:
     timeout-minutes: ${{ inputs.timeout || 20 }} # default to 20m timeout if non specified
     permissions: {}
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           persist-credentials: false
 
@@ -70,6 +74,10 @@ jobs:
         run: | # zizmor: ignore[template-injection]
           ./hack/ci/ci.sh ${{ inputs.test }} ${{ inputs.mode }} ${{ inputs.priv }} ${{ inputs.distro }}
 
+      - name: Output failure log as GITHUB_STEP_SUMMARY
+        if: failure()
+        run: hack/ci/github_log_summary.py hack/ci/logs/*.html > $GITHUB_STEP_SUMMARY || true
+
       # TODO: figure out how to cache the binaries from the build job to the actual test tasks
       # - name: Upload binaries as artifact
       #   if: ${{ inputs.test == 'build' }}
@@ -83,6 +91,6 @@ jobs:
         if: always() # always collect the log
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a #v7.0.1
         with:
-          name: "journal-${{ inputs.test }}-${{ inputs.mode }}-${{ inputs.priv }}-${{ inputs.distro }}.log"
-          path: "./hack/ci/journal.log"
+          name: "${{ inputs.test }}-${{ inputs.mode }}-${{ inputs.priv }}-${{ inputs.distro }}.logs"
+          path: "./hack/ci/logs/*"
           if-no-files-found: ignore

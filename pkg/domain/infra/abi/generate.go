@@ -9,10 +9,12 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/opencontainers/selinux/go-selinux"
 	"go.podman.io/podman/v6/libpod"
 	"go.podman.io/podman/v6/libpod/define"
 	"go.podman.io/podman/v6/pkg/domain/entities"
 	k8sAPI "go.podman.io/podman/v6/pkg/k8s.io/api/core/v1"
+	"go.podman.io/podman/v6/pkg/rootless"
 	"go.podman.io/podman/v6/pkg/specgen"
 	generateUtils "go.podman.io/podman/v6/pkg/specgen/generate"
 	"go.podman.io/podman/v6/pkg/systemd/generate"
@@ -218,7 +220,7 @@ func (ic *ContainerEngine) GenerateKube(ctx context.Context, nameOrIDs []string,
 		if err != nil {
 			return nil, err
 		}
-		if len(po.Spec.Volumes) != 0 {
+		if len(po.Spec.Volumes) != 0 && selinux.GetEnabled() && rootless.IsRootless() {
 			warning := `
 # NOTE: If you generated this yaml from an unprivileged and rootless podman container on an SELinux
 # enabled system, check the podman generate kube man page for steps to follow to ensure that your pod/container

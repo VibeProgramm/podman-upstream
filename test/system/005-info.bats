@@ -44,6 +44,9 @@ host.conmon.path          | $expr_path
 host.conmon.package       | .*conmon.*
 host.cgroupManager        | \\\(systemd\\\|cgroupfs\\\)
 host.cgroupVersion        | v[12]
+host.memFree              | [0-9]\\\+
+host.memAvailable         | [0-9]\\\+
+host.memTotal             | [0-9]\\\+
 host.networkBackendInfo   | .*dns.*package.*
 host.ociRuntime.path      | $expr_path
 host.pasta                | .*executable.*package.*
@@ -60,24 +63,6 @@ store.imageStore.number   | 1
         dprint "# actual=<$actual> expect=<$expect>"
         is "$actual" "$expect" "jq .$field"
     done < <(parse_table "$tests")
-}
-
-@test "podman info - confirm desired runtime" {
-    if [[ -z "$CI_DESIRED_RUNTIME" ]]; then
-        # When running in Cirrus, CI_DESIRED_RUNTIME *must* be defined
-        # in .cirrus.yml so we can double-check that all CI VMs are
-        # using crun/runc as desired.
-        if [[ -n "$CIRRUS_CI" ]]; then
-            die "CIRRUS_CI is set, but CI_DESIRED_RUNTIME is not! See #14912"
-        fi
-
-        # Not running under Cirrus (e.g., gating tests, or dev laptop).
-        # Totally OK to skip this test.
-        skip "CI_DESIRED_RUNTIME is unset--OK, because we're not in Cirrus"
-    fi
-
-    run_podman info --format '{{.Host.OCIRuntime.Name}}'
-    is "$output" "$CI_DESIRED_RUNTIME" "CI_DESIRED_RUNTIME (from .cirrus.yml)"
 }
 
 @test "podman info - confirm desired network backend" {
@@ -102,19 +87,19 @@ store.imageStore.number   | 1
 
 @test "podman info - confirm desired storage driver" {
     if [[ -z "$CI_DESIRED_STORAGE" ]]; then
-        # When running in Cirrus, CI_DESIRED_STORAGE *must* be defined
-        # in .cirrus.yml so we can double-check that all CI VMs are
-        # using overlay or vfs as desired.
-        if [[ -n "$CIRRUS_CI" ]]; then
-            die "CIRRUS_CI is set, but CI_DESIRED_STORAGE is not! See #20161"
+        # In our CI, CI_DESIRED_STORAGE *must* be set by hack/ci/runner.sh
+        # so we can double-check that all CI VMs are using overlay or vfs
+        # as desired.
+        if [[ -n "$PODMAN_CI" ]]; then
+            die "PODMAN_CI is set, but CI_DESIRED_STORAGE is not! See #20161"
         fi
 
-        # Not running under Cirrus (e.g., gating tests, or dev laptop).
+        # Not running in podman CI (e.g., gating tests, or dev laptop).
         # Totally OK to skip this test.
-        skip "CI_DESIRED_STORAGE is unset--OK, because we're not in Cirrus"
+        skip "CI_DESIRED_STORAGE is unset--OK, because we're not in podman CI"
     fi
 
-    is "$(podman_storage_driver)" "$CI_DESIRED_STORAGE" "podman storage driver is not CI_DESIRED_STORAGE (from .cirrus.yml)"
+    is "$(podman_storage_driver)" "$CI_DESIRED_STORAGE" "podman storage driver is not CI_DESIRED_STORAGE"
 
     # Confirm desired setting of composefs
     if [[ "$CI_DESIRED_STORAGE" = "overlay" ]]; then

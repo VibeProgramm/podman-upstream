@@ -12,7 +12,10 @@ t GET /v1.52/system/df 200 '{"ImageUsage":{},"ContainerUsage":{},"VolumeUsage":{
 t GET libpod/system/df 200 '{"ImagesSize":0,"Images":[],"Containers":[],"Volumes":[]}'
 
 # Create volume. We expect df to report this volume next invocation of system/df
-t GET libpod/info 200
+t GET libpod/info 200 \
+    .host.memTotal~[0-9]\\+ \
+    .host.memFree~[0-9]\\+ \
+    .host.memAvailable~[0-9]\\+
 volumepath=$(jq -r ".store.volumePath" <<<"$output")
 t POST libpod/volumes/create name=foo1  201 \
     .Name=foo1 \

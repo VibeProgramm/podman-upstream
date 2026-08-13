@@ -206,6 +206,10 @@ Enables a global transient storage mode where all container metadata is stored o
 This mode allows starting containers faster, as well as guaranteeing a fresh state on boot in case of unclean shutdowns or other problems. However
 it is not compatible with a traditional model where containers persist across reboots.
 
+Only the Podman database (container and volume metadata) is stored transiently. Volume data on disk is not affected and persists across reboots. After a reboot, previously created volumes will not appear in **podman volume ls** because their database entries were lost, but the underlying data remains in the volume storage directory. If a container later creates a volume with the same name, it will reuse the existing data. To clean up leftover volume data that is no longer tracked by the database, use **podman system prune --external**.
+
+It should be used consistently across all Podman commands and not mixed with regular (non-transient) usage within the same environment.
+
 Default value for this is configured in `containers-storage.conf(5)`.
 
 #### **--url**=*value*

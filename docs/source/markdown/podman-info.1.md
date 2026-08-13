@@ -75,6 +75,7 @@ host:
   kernel: 5.13.13-200.fc34.x86_64
   linkmode: dynamic
   logDriver: journald
+  memAvailable: 14567456768
   memFree: 1833385984
   memTotal: 16401895424
   networkBackend: netavark
@@ -218,6 +219,7 @@ $ podman info --format json
     },
     "kernel": "5.13.13-200.fc34.x86_64",
     "logDriver": "journald",
+    "memAvailable": 14567456768,
     "memFree": 1785753600,
     "memTotal": 16401895424,
     "networkBackend": "netavark",

@@ -1,6 +1,6 @@
 // This file is safe to edit. Once it exists it will not be overwritten
 
-{{ if .Copyright -}}// {{ comment .Copyright -}}{{ end }}
+{{ if .Copyright -}}{{ lineComment .Copyright -}}{{ end }}
 
 
 package {{ .APIPackage }}
@@ -16,6 +16,7 @@ import (
   "github.com/go-openapi/runtime"
   "github.com/go-openapi/runtime/middleware"
   "github.com/go-openapi/runtime/security"
+  "github.com/go-openapi/swag/cmdutils"
 
   {{ imports .DefaultImports }}
   {{ imports .Imports }}
@@ -43,7 +44,7 @@ import (
 {{- if .ReturnErrors }} --return-errors{{ end }}
 {{ end }}
 func configureFlags(api *{{.APIPackageAlias}}.{{ pascalize .Name }}API) {
-  // api.CommandLineOptionsGroups = []swag.CommandLineOptionsGroup{ ... }
+  // api.CommandLineOptionsGroups = []cmdutils.CommandLineOptionsGroup{ ... }
   _ = api
 }
 
@@ -93,16 +94,16 @@ func configureAPI(api *{{.APIPackageAlias}}.{{ pascalize .Name }}API) http.Handl
       _ = user
       _ = password
 
-      return nil, errors.NotImplemented("basic auth  ({{ .ID }}) has not yet been implemented")
+      return nil, errors.NotImplemented("basic auth  ({{ escapeDoubleQuoted .ID }}) has not yet been implemented")
     }
   }
     {{- else if .IsAPIKeyAuth }}
-  // Applies when the "{{ .Name }}" {{ .Source }} is set
+  // Applies when the "{{ escapeDoubleQuoted .Name }}" {{ escapeDoubleQuoted .Source }} is set
   if api.{{ pascalize .ID }}Auth == nil {
   api.{{ pascalize .ID }}Auth = func(token string) ({{ if .PrincipalIsNullable }}*{{ end }}{{.Principal}}, error) {
       _ = token
 
-      return nil, errors.NotImplemented("api key auth ({{ .ID }}) {{.Name}} from {{.Source}} param [{{ .Name }}] has not yet been implemented")
+      return nil, errors.NotImplemented("api key auth ({{ escapeDoubleQuoted .ID }}) {{ escapeDoubleQuoted .Name }} from {{ escapeDoubleQuoted .Source }} param [{{ escapeDoubleQuoted .Name }}] has not yet been implemented")
     }
   }
     {{- else if .IsOAuth2 }}
@@ -111,7 +112,7 @@ func configureAPI(api *{{.APIPackageAlias}}.{{ pascalize .Name }}API) http.Handl
       _ = token
       _ = scopes
 
-      return nil, errors.NotImplemented("oauth2 bearer auth ({{ .ID }}) has not yet been implemented")
+      return nil, errors.NotImplemented("oauth2 bearer auth ({{ escapeDoubleQuoted .ID }}) has not yet been implemented")
     }
   }
     {{- end }}

@@ -15,7 +15,7 @@ function setup_suite(){
         export ROOTLESS_USER=$(id -un)
     fi
 
-    sshdir=/home/$ROOTLESS_USER/.ssh
+    sshdir=$HOME/.ssh
     sshkey=$sshdir/id_rsa
     if [[ ! -e $sshkey ]]; then
         ssh-keygen -t rsa -N "" -f $sshkey

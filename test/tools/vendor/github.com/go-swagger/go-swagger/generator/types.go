@@ -15,7 +15,9 @@ import (
 
 	"github.com/go-openapi/loads"
 	"github.com/go-openapi/spec"
-	"github.com/go-openapi/swag"
+	"github.com/go-openapi/swag/conv"
+	"github.com/go-openapi/swag/mangling"
+	"github.com/go-openapi/swag/typeutils"
 )
 
 const (
@@ -49,47 +51,53 @@ const (
 	xGoOperationTag = "x-go-operation-tag" // additional tag to override generation in operation groups
 )
 
-// swaggerTypeName contains a mapping from go type to swagger type or format.
-var swaggerTypeName map[string]string
-
-func initTypes() {
-	swaggerTypeName = make(map[string]string)
-	for k, v := range typeMapping {
-		swaggerTypeName[v] = k
-	}
-}
-
 type typeResolver struct {
 	Doc           *loads.Document
 	ModelsPackage string // package alias (e.g. "models")
 	ModelsFullPkg string // fully qualified package (e.g. "github.com/example/models")
 	ModelName     string
 	KnownDefs     map[string]struct{}
+
 	// unexported fields
 	keepDefinitionsPkg string
 	knownDefsKept      map[string]struct{}
 	definitionPkg      string // pkg alias to fill in GenSchema.Pkg
+	mangler            mangling.NameMangler
+	pkgMangler         func(string, string) string
 }
 
-func newTypeResolver(pkg, _ string, doc *loads.Document) *typeResolver {
-	resolver := typeResolver{ModelsPackage: pkg, Doc: doc}
-	resolver.KnownDefs = make(map[string]struct{}, len(doc.Spec().Definitions))
-	for k, sch := range doc.Spec().Definitions {
-		tpe, _, _ := resolver.knownDefGoType(k, sch, nil)
-		resolver.KnownDefs[tpe] = struct{}{}
+func newTypeResolver(pkg string, doc *loads.Document, opts *GenOpts) *typeResolver {
+	resolver := typeResolver{
+		ModelsPackage: pkg,
+		Doc:           doc,
+		KnownDefs:     make(map[string]struct{}, len(doc.Spec().Definitions)),
+		mangler:       opts.LanguageOpts.Mangler,
+		pkgMangler:    opts.LanguageOpts.ManglePackageName,
 	}
+
+	resolver.setDefs()
+
 	return &resolver
 }
 
 // NewWithModelName clones a type resolver and specifies a new model name.
 func (t *typeResolver) NewWithModelName(name string) *typeResolver {
-	tt := newTypeResolver(t.ModelsPackage, t.ModelsFullPkg, t.Doc)
+	tt := &typeResolver{
+		ModelsPackage: t.ModelsPackage,
+		Doc:           t.Doc,
+		KnownDefs:     make(map[string]struct{}, len(t.Doc.Spec().Definitions)),
+		mangler:       t.mangler,
+		pkgMangler:    t.pkgMangler,
+	}
+
+	tt.setDefs()
 	tt.ModelName = name
 
 	// propagates kept definitions
 	tt.keepDefinitionsPkg = t.keepDefinitionsPkg
 	tt.knownDefsKept = t.knownDefsKept
 	tt.definitionPkg = t.definitionPkg
+
 	return tt
 }
 
@@ -131,7 +139,7 @@ func (t *typeResolver) ResolveSchema(schema *spec.Schema, isAnonymous, isRequire
 			result.IsAliased = true
 			result.IsNullable = isRequired
 			if extType.Hints.Nullable != nil {
-				result.IsNullable = swag.BoolValue(extType.Hints.Nullable)
+				result.IsNullable = conv.Value(extType.Hints.Nullable)
 			}
 
 			result.IsMap = false
@@ -144,7 +152,7 @@ func (t *typeResolver) ResolveSchema(schema *spec.Schema, isAnonymous, isRequire
 					IsInterface:            false,
 					Pkg:                    extType.Import.Package,
 					PkgAlias:               extType.Import.Alias,
-					SkipExternalValidation: swag.BoolValue(extType.Hints.NoValidation),
+					SkipExternalValidation: conv.Value(extType.Hints.NoValidation),
 				}
 				if extType.Import.Alias != "" {
 					result.ElemType.GoType = extType.Import.Alias + "." + extType.Type
@@ -156,20 +164,20 @@ func (t *typeResolver) ResolveSchema(schema *spec.Schema, isAnonymous, isRequire
 					result.ElemType.IsNullable = false
 				}
 				if extType.Hints.Nullable != nil {
-					result.ElemType.IsNullable = swag.BoolValue(extType.Hints.Nullable)
+					result.ElemType.IsNullable = conv.Value(extType.Hints.Nullable)
 				}
 				// embedded external: by default consider validation is skipped for the external type
 				//
 				// NOTE: at this moment the template generates a type assertion, so this setting does not really matter
 				// for embedded types.
 				if extType.Hints.NoValidation != nil {
-					result.ElemType.SkipExternalValidation = swag.BoolValue(extType.Hints.NoValidation)
+					result.ElemType.SkipExternalValidation = conv.Value(extType.Hints.NoValidation)
 				} else {
 					result.ElemType.SkipExternalValidation = true
 				}
 			} else {
 				// non-embedded external type: by default consider that validation is enabled (SkipExternalValidation: false)
-				result.SkipExternalValidation = swag.BoolValue(extType.Hints.NoValidation)
+				result.SkipExternalValidation = conv.Value(extType.Hints.NoValidation)
 			}
 
 			if nullable, ok := t.isNullableOverride(schema); ok {
@@ -279,6 +287,13 @@ func (t *typeResolver) ResolveSchema(schema *spec.Schema, isAnonymous, isRequire
 	return result, err
 }
 
+func (t *typeResolver) setDefs() {
+	for k, sch := range t.Doc.Spec().Definitions {
+		tpe, _, _ := t.knownDefGoType(k, sch, nil)
+		t.KnownDefs[tpe] = struct{}{}
+	}
+}
+
 func (t typeResolver) resolveExternalType(ext spec.Extensions) (*externalTypeDefinition, bool) {
 	extType, hasExt := hasExternalType(ext)
 	if !hasExt {
@@ -289,7 +304,7 @@ func (t typeResolver) resolveExternalType(ext spec.Extensions) (*externalTypeDef
 	// * basic deconfliction of the default alias
 	// * if no package is specified, defaults to models (as provided from CLI or defaut generation location for models)
 	toAlias := func(pkg string) string {
-		mangled := GolangOpts().ManglePackageName(pkg, "")
+		mangled := t.pkgMangler(pkg, "")
 		return deconflictPkg(mangled, func(in string) string {
 			return in + "ext"
 		})
@@ -321,9 +336,13 @@ func (t typeResolver) knownDefGoType(def string, schema spec.Schema, clearFunc f
 	ext := schema.Extensions
 	nm, hasGoName := ext.GetString(xGoName)
 
+	// x-go-name tells the Go identifier here, verbatim. Ignore a value that is not
+	// a plain identifier so it cannot break out and inject unwanted declarations downstream.
 	if hasGoName {
-		debugLogf("known def type %s named from %s as %q", def, xGoName, nm)
-		def = nm
+		if nm = sanitizeGoNameOverride(nm); nm != "" {
+			debugLogf("known def type %s named from %s as %q", def, xGoName, nm)
+			def = nm
+		}
 	}
 	extType, isExternalType := t.resolveExternalType(ext)
 	if !isExternalType || extType.Embedded {
@@ -352,6 +371,7 @@ func (t *typeResolver) withKeepDefinitionsPackage(definitionsPackage string) *ty
 	for k := range t.KnownDefs {
 		t.knownDefsKept[k] = struct{}{}
 	}
+
 	return t
 }
 
@@ -384,7 +404,7 @@ func (t *typeResolver) resolveSchemaRef(schema *spec.Schema, isRequired bool) (r
 	extType, isExternalType := t.resolveExternalType(schema.Extensions)
 	if isExternalType {
 		// deal with validations for an aliased external type
-		result.SkipExternalValidation = swag.BoolValue(extType.Hints.NoValidation)
+		result.SkipExternalValidation = conv.Value(extType.Hints.NoValidation)
 	}
 
 	res, er := t.ResolveSchema(ref, false, isRequired)
@@ -595,17 +615,17 @@ func (t *typeResolver) goTypeName(nm string) string {
 		// current package.
 		// This allows complex anonymous extra schemas to reuse known definitions generated in another package.
 		if _, ok := t.knownDefsKept[nm]; ok {
-			return strings.Join([]string{t.keepDefinitionsPkg, swag.ToGoName(nm)}, ".")
+			return strings.Join([]string{t.keepDefinitionsPkg, t.mangler.ToGoName(nm)}, ".")
 		}
 	}
 
 	if t.ModelsPackage == "" {
-		return swag.ToGoName(nm)
+		return t.mangler.ToGoName(nm)
 	}
 	if _, ok := t.KnownDefs[nm]; ok {
-		return strings.Join([]string{t.ModelsPackage, swag.ToGoName(nm)}, ".")
+		return strings.Join([]string{t.ModelsPackage, t.mangler.ToGoName(nm)}, ".")
 	}
-	return swag.ToGoName(nm)
+	return t.mangler.ToGoName(nm)
 }
 
 //nolint:gocognit // TODO(fredbi): refactor
@@ -768,7 +788,7 @@ func nullableNumber(schema *spec.Schema, isRequired bool) bool {
 	if nullable := nullableExtension(schema.Extensions); nullable != nil {
 		return *nullable
 	}
-	hasDefault := schema.Default != nil && !swag.IsZero(schema.Default)
+	hasDefault := schema.Default != nil && !typeutils.IsZero(schema.Default)
 
 	isMin := schema.Minimum != nil && (*schema.Minimum != 0 || schema.ExclusiveMinimum)
 	bcMin := schema.Minimum != nil && *schema.Minimum == 0 && !schema.ExclusiveMinimum
@@ -792,7 +812,7 @@ func (t *typeResolver) shortCircuitResolveExternal(tpe, pkg, alias string, extTy
 	result.PkgAlias = alias
 	result.IsInterface = false
 	// by default consider that we have a type with validations. Use hint "interface" or "noValidation" to disable validations
-	result.SkipExternalValidation = swag.BoolValue(extType.Hints.NoValidation)
+	result.SkipExternalValidation = conv.Value(extType.Hints.NoValidation)
 	result.IsNullable = isRequired
 
 	result.setKind(extType.Hints.Kind)
@@ -800,7 +820,7 @@ func (t *typeResolver) shortCircuitResolveExternal(tpe, pkg, alias string, extTy
 		result.IsNullable = false
 	}
 	if extType.Hints.Nullable != nil {
-		result.IsNullable = swag.BoolValue(extType.Hints.Nullable)
+		result.IsNullable = conv.Value(extType.Hints.Nullable)
 	}
 
 	if nullable, ok := t.isNullableOverride(schema); ok {
@@ -828,7 +848,7 @@ func nullableString(schema *spec.Schema, isRequired bool) bool {
 	if nullable := nullableExtension(schema.Extensions); nullable != nil {
 		return *nullable
 	}
-	hasDefault := schema.Default != nil && !swag.IsZero(schema.Default)
+	hasDefault := schema.Default != nil && !typeutils.IsZero(schema.Default)
 
 	isMin := schema.MinLength != nil && *schema.MinLength != 0
 	bcMin := schema.MinLength != nil && *schema.MinLength == 0
@@ -842,7 +862,7 @@ func nullableStrfmt(schema *spec.Schema, isRequired bool) bool {
 	if nullable := nullableExtension(schema.Extensions); nullable != nil && notBinary {
 		return *nullable
 	}
-	hasDefault := schema.Default != nil && !swag.IsZero(schema.Default)
+	hasDefault := schema.Default != nil && !typeutils.IsZero(schema.Default)
 
 	nullable := !schema.ReadOnly && (isRequired || hasDefault)
 	return notBinary && nullable
@@ -1273,6 +1293,25 @@ func hasExternalType(ext spec.Extensions) (*externalTypeDefinition, bool) {
 	err := mapstructure.Decode(v, &extType)
 	if err != nil {
 		log.Printf("warning: x-go-type extension could not be decoded (%v). Skipped", v)
+		return nil, false
+	}
+
+	// Input sanitization: type and (explicit) import alias are emitted verbatim into
+	// generated source as a type reference and an import-block alias.
+	//
+	// A value that is not a plain Go identifier could break out of those positions and
+	// inject declarations. Skip a malformed extension (consistent with the
+	// decode-error handling above) so the spec falls back to normal generation.
+	//
+	// The import package is rendered as a %q string literal and is left as-is —
+	// its capability (importing an arbitrary package) is documented, not a
+	// syntactic injection.
+	if extType.Type != "" && !isGoQualifiedType(extType.Type) {
+		log.Printf("warning: %s type %q is not a valid Go type name. Skipped for security reasons", xGoType, extType.Type)
+		return nil, false
+	}
+	if extType.Import.Alias != "" && !isGoIdentifier(extType.Import.Alias) {
+		log.Printf("warning: %s import alias %q is not a valid Go identifier. Skipped for security reasons", xGoType, extType.Import.Alias)
 		return nil, false
 	}
 

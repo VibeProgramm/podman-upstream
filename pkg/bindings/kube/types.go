@@ -53,6 +53,9 @@ type PlayOptions struct {
 	NoTrunc *bool
 	// Userns - define the user namespace to use.
 	Userns *string
+	// Validate - how to handle unrecognized YAML fields and kinds:
+	// "ignore", "warn", or "strict".
+	Validate *string
 	// Force - remove volumes on --down
 	Force *bool
 	// PublishPorts - configure how to expose ports configured inside the K8S YAML file

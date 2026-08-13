@@ -19,7 +19,8 @@ import (
 	"github.com/go-openapi/analysis"
 	"github.com/go-openapi/loads"
 	"github.com/go-openapi/spec"
-	"github.com/go-openapi/swag"
+	"github.com/go-openapi/swag/jsonutils"
+	"github.com/go-openapi/swag/mangling"
 )
 
 const asMethod = "()"
@@ -52,20 +53,17 @@ func GenerateModels(modelNames []string, opts *GenOpts) error {
 	if err != nil {
 		return err
 	}
+
 	return generator.Generate()
 }
 
 // GenerateDefinition generates a single model file for some schema definitions.
 func GenerateDefinition(modelNames []string, opts *GenOpts) error {
-	if err := opts.CheckOpts(); err != nil {
+	if err := opts.Prepare(); err != nil {
 		return err
 	}
 
-	if err := opts.setTemplates(); err != nil {
-		return err
-	}
-
-	specDoc, _, err := opts.analyzeSpec()
+	specDoc, _, err := newSpecAnalyzer(opts).analyzeSpec()
 	if err != nil {
 		return err
 	}
@@ -118,7 +116,12 @@ func (m *definitionGenerator) Generate() error {
 	}
 
 	if m.opts.DumpData {
-		return dumpData(os.Stdout, swag.ToDynamicJSON(mod))
+		var dynamicMod any
+		if err := jsonutils.FromDynamicJSON(mod, &dynamicMod); err != nil {
+			return err
+		}
+
+		return dumpData(os.Stdout, dynamicMod)
 	}
 
 	if m.opts.IncludeModel {
@@ -134,7 +137,7 @@ func (m *definitionGenerator) Generate() error {
 
 func (m *definitionGenerator) generateModel(g *GenDefinition) error {
 	debugLogf("rendering definitions for %+v", *g)
-	return m.opts.renderDefinition(g)
+	return newRenderer(m.opts).renderDefinition(g)
 }
 
 func makeGenDefinition(name, pkg string, schema spec.Schema, specDoc *loads.Document, opts *GenOpts) (*GenDefinition, error) {
@@ -224,11 +227,21 @@ func makeGenDefinitionHierarchy(name, pkg, container string, schema spec.Schema,
 	receiver := "m"
 	// models are resolved in the current package
 	modelPkg := opts.LanguageOpts.ManglePackageName(path.Base(filepath.ToSlash(pkg)), "definitions")
-	resolver := newTypeResolver("", "", specDoc).withDefinitionPackage(modelPkg)
+	resolver := newTypeResolver("", specDoc, opts).withDefinitionPackage(modelPkg)
 	resolver.ModelName = name
 	analyzed := analysis.New(specDoc.Spec())
 
-	di := discriminatorInfo(analyzed)
+	di := discriminatorInfo(analyzed, opts)
+
+	pascalize, ok := opts.funcMap["pascalize"].(func(string) string)
+	if !ok {
+		return nil, errors.New("internal error: expected pascalize to be func(string) string")
+	}
+
+	jsonify, ok := opts.funcMap["json"].(func(any) (string, error))
+	if !ok {
+		return nil, errors.New("internal error: expected json to be func(any) (string, error)")
+	}
 
 	pg := schemaGenContext{
 		Path:                       "",
@@ -249,10 +262,16 @@ func makeGenDefinitionHierarchy(name, pkg, container string, schema spec.Schema,
 		WithXML:                    opts.WithXML,
 		StructTags:                 opts.StructTags,
 		WantsRootedErrorPath:       opts.WantsRootedErrorPath,
+		WantsStringer:              opts.WantsStringer,
+		mangler:                    opts.LanguageOpts.Mangler,
+		pascalize:                  pascalize,
+		jsonify:                    jsonify,
 	}
+
 	if err := pg.makeGenSchema(); err != nil {
 		return nil, fmt.Errorf("could not generate schema for %s: %w", name, err)
 	}
+
 	dsi, ok := di.Discriminators["#/definitions/"+name]
 	if ok {
 		// when these 2 are true then the schema will render as an interface
@@ -347,17 +366,21 @@ func makeGenDefinitionHierarchy(name, pkg, container string, schema spec.Schema,
 	}
 
 	defaultImports := map[string]string{
-		"errors":   "github.com/go-openapi/errors",
-		"runtime":  "github.com/go-openapi/runtime",
-		"swag":     "github.com/go-openapi/swag",
-		"validate": "github.com/go-openapi/validate",
-		"strfmt":   "github.com/go-openapi/strfmt",
+		"errors":      "github.com/go-openapi/errors",
+		"runtime":     "github.com/go-openapi/runtime",
+		"strfmt":      "github.com/go-openapi/strfmt",
+		"conv":        "github.com/go-openapi/swag/conv",
+		"jsonutils":   "github.com/go-openapi/swag/jsonutils",
+		"netutils":    "github.com/go-openapi/swag/netutils",
+		"stringutils": "github.com/go-openapi/swag/stringutils",
+		"typeutils":   "github.com/go-openapi/swag/typeutils",
+		"validate":    "github.com/go-openapi/validate",
 	}
 
 	return &GenDefinition{
 		GenCommon: GenCommon{
 			Copyright:        opts.Copyright,
-			TargetImportPath: opts.LanguageOpts.baseImport(opts.Target),
+			TargetImportPath: opts.LanguageOpts.BaseImport(opts.Target),
 		},
 		Package:        modelPkg,
 		CliPackage:     opts.CliPackage,
@@ -431,6 +454,7 @@ type schemaGenContext struct {
 	IncludeModel               bool
 	StrictAdditionalProperties bool
 	WantsRootedErrorPath       bool
+	WantsStringer              bool
 	WithXML                    bool
 	Index                      int
 
@@ -460,6 +484,10 @@ type schemaGenContext struct {
 	IsElem bool
 	// indicates is the schema is part of a struct
 	IsProperty bool
+
+	mangler   mangling.NameMangler
+	pascalize func(string) string
+	jsonify   func(any) (string, error)
 }
 
 func (sg *schemaGenContext) NewSliceBranch(schema *spec.Schema) *schemaGenContext {
@@ -476,7 +504,7 @@ func (sg *schemaGenContext) NewSliceBranch(schema *spec.Schema) *schemaGenContex
 		_, rewriteValueExpr := sg.Discrimination.Discriminators["#/definitions/"+sg.TypeResolver.ModelName]
 		if (pg.IndexVar == "i" && rewriteValueExpr) || sg.GenSchema.ElemType.IsBaseType {
 			if !sg.GenSchema.IsAliased {
-				pg.ValueExpr = sg.Receiver + "." + swag.ToJSONName(sg.GenSchema.Name) + "Field"
+				pg.ValueExpr = sg.Receiver + "." + sg.mangler.ToJSONName(sg.GenSchema.Name) + "Field"
 			} else {
 				pg.ValueExpr = sg.Receiver
 			}
@@ -516,7 +544,7 @@ func (sg *schemaGenContext) NewAdditionalItems(schema *spec.Schema) *schemaGenCo
 		pg.Path = pg.Path + "+ \".\" + strconv.Itoa(" + indexVar + mod + ")"
 	}
 	pg.IndexVar = indexVar
-	pg.ValueExpr = sg.ValueExpr + "." + pascalize(sg.GoName()) + "Items[" + indexVar + "]"
+	pg.ValueExpr = sg.ValueExpr + "." + sg.GenSchema.GoName + "Items[" + indexVar + "]"
 	pg.Schema = spec.Schema{}
 	if schema != nil {
 		pg.Schema = *schema
@@ -552,7 +580,7 @@ func (sg *schemaGenContext) NewStructBranch(name string, schema spec.Schema) *sc
 		pg.Path = pg.Path + "+\".\"+" + fmt.Sprintf("%q", name)
 	}
 	pg.Name = name
-	pg.ValueExpr = pg.ValueExpr + "." + pascalize(goName(&schema, name))
+	pg.ValueExpr = pg.ValueExpr + "." + schemaGoName(&schema, name, sg.mangler)
 	pg.Schema = schema
 	pg.IsProperty = true
 	if slices.Contains(sg.Schema.Required, name) {
@@ -680,7 +708,7 @@ func (sg *schemaGenContext) buildProperties() error {
 		vv := v
 
 		// check if this requires de-anonymizing, if so lift this as a new struct and extra schema
-		tpe, err := sg.TypeResolver.ResolveSchema(&vv, true, sg.IsTuple || swag.ContainsStrings(sg.Schema.Required, k))
+		tpe, err := sg.TypeResolver.ResolveSchema(&vv, true, sg.IsTuple || slices.Contains(sg.Schema.Required, k))
 		if err != nil {
 			return err
 		}
@@ -691,7 +719,7 @@ func (sg *schemaGenContext) buildProperties() error {
 		var hasValidation bool
 		if tpe.IsComplexObject && tpe.IsAnonymous && len(v.Properties) > 0 {
 			// this is an anonymous complex construct: build a new type for it
-			pg := sg.makeNewStruct(sg.makeRefName()+swag.ToGoName(k), v)
+			pg := sg.makeNewStruct(sg.makeRefName()+sg.mangler.ToGoName(k), v)
 			pg.IsTuple = sg.IsTuple
 			if sg.Path != "" {
 				pg.Path = sg.Path + "+ \".\"+" + fmt.Sprintf("%q", k)
@@ -770,7 +798,7 @@ func (sg *schemaGenContext) buildProperties() error {
 			// set property name
 			nm := filepath.Base(emprop.Schema.Ref.GetURL().Fragment)
 
-			tr := sg.TypeResolver.NewWithModelName(goName(&emprop.Schema, swag.ToGoName(nm)))
+			tr := sg.TypeResolver.NewWithModelName(goName(&emprop.Schema, sg.mangler.ToGoName(nm)))
 			ttpe, err := tr.ResolveSchema(sch, false, true)
 			if err != nil {
 				return err
@@ -884,7 +912,7 @@ func (sg *schemaGenContext) buildAllOf() error {
 			// - nested allOf: this one is itself a AllOf: build a new type for it
 			// - anonymous simple types for edge cases: array, primitive, any
 			// NOTE: when branches are aliased or anonymous, the nullable property in the branch type is lost.
-			name := swag.ToVarName(goName(&sch, sg.makeRefName()+"AllOf"+strconv.Itoa(i)))
+			name := sg.mangler.ToVarName(goName(&sch, sg.makeRefName()+"AllOf"+strconv.Itoa(i)))
 			debugLogf("building anonymous nested allOf in %s: %s", sg.Name, name)
 			ng := sg.makeNewStruct(name, sch)
 			if err := ng.makeGenSchema(); err != nil {
@@ -927,7 +955,7 @@ func (sg *schemaGenContext) buildAllOf() error {
 		}
 		if comprop.GenSchema.IsMap && comprop.GenSchema.HasAdditionalProperties && comprop.GenSchema.AdditionalProperties != nil && !comprop.GenSchema.IsInterface {
 			// the anonymous branch is a map for AdditionalProperties: rewrite value expression
-			comprop.GenSchema.ValueExpression = comprop.GenSchema.ValueExpression + "." + comprop.Name
+			comprop.GenSchema.ValueExpression = comprop.GenSchema.ValueExpression + "." + comprop.GenSchema.GoName
 			comprop.GenSchema.AdditionalProperties.ValueExpression = comprop.GenSchema.ValueExpression + "[" + comprop.GenSchema.AdditionalProperties.KeyVar + "]"
 		}
 
@@ -995,7 +1023,7 @@ func (sg *schemaGenContext) buildAdditionalProperties() error {
 			sg.GenSchema.IsMap = true
 
 			if !sg.IsElem && !sg.IsProperty {
-				sg.GenSchema.ValueExpression += "." + swag.ToGoName(sg.Name+" additionalProperties")
+				sg.GenSchema.ValueExpression += "." + sg.mangler.ToGoName(sg.Name+" additionalProperties")
 			}
 			cp := sg.NewAdditionalProperty(*addp.Schema)
 			cp.Name += "AdditionalProperties"
@@ -1038,11 +1066,11 @@ func (sg *schemaGenContext) buildAdditionalProperties() error {
 			comprop.GenSchema.Required = true
 			comprop.GenSchema.HasValidations = true
 
-			comprop.GenSchema.ValueExpression = sg.GenSchema.ValueExpression + "." + swag.ToGoName(sg.GenSchema.Name) + "[" + comprop.KeyVar + "]"
+			comprop.GenSchema.ValueExpression = sg.GenSchema.ValueExpression + "." + sg.GenSchema.GoName + "[" + comprop.KeyVar + "]"
 
 			sg.GenSchema.AdditionalProperties = &comprop.GenSchema
 			sg.GenSchema.HasAdditionalProperties = true
-			sg.GenSchema.ValueExpression += "." + swag.ToGoName(sg.GenSchema.Name)
+			sg.GenSchema.ValueExpression += "." + sg.GenSchema.GoName
 
 			sg.MergeResult(comprop, false)
 
@@ -1050,7 +1078,7 @@ func (sg *schemaGenContext) buildAdditionalProperties() error {
 		}
 
 		// this is a regular named schema for AdditionalProperties
-		sg.GenSchema.ValueExpression += "." + swag.ToGoName(sg.GenSchema.Name)
+		sg.GenSchema.ValueExpression += "." + sg.GenSchema.GoName
 		comprop := sg.NewAdditionalProperty(*addp.Schema)
 		d := sg.TypeResolver.Doc
 		asch, err := analysis.Schema(analysis.SchemaOpts{
@@ -1139,9 +1167,9 @@ func (sg *schemaGenContext) buildAdditionalProperties() error {
 func (sg *schemaGenContext) makeNewStruct(name string, schema spec.Schema) *schemaGenContext {
 	debugLogf("making new struct: name: %s, container: %s", name, sg.Container)
 	sp := sg.TypeResolver.Doc.Spec()
-	name = swag.ToGoName(name)
+	name = sg.mangler.ToGoName(name)
 	if sg.TypeResolver.ModelName != sg.Name {
-		name = swag.ToGoName(sg.TypeResolver.ModelName + " " + name)
+		name = sg.mangler.ToGoName(sg.TypeResolver.ModelName + " " + name)
 	}
 	if sp.Definitions == nil {
 		sp.Definitions = make(spec.Definitions)
@@ -1163,6 +1191,9 @@ func (sg *schemaGenContext) makeNewStruct(name string, schema spec.Schema) *sche
 		IncludeModel:               sg.IncludeModel,
 		StrictAdditionalProperties: sg.StrictAdditionalProperties,
 		StructTags:                 sg.StructTags,
+		mangler:                    sg.mangler,
+		pascalize:                  sg.pascalize,
+		jsonify:                    sg.jsonify,
 	}
 	if schema.Ref.String() == "" {
 		pg.TypeResolver = sg.TypeResolver.NewWithModelName(name)
@@ -1304,6 +1335,7 @@ func (sg *schemaGenContext) buildItems() error {
 			sg.MergeResult(elProp, false)
 
 			elProp.GenSchema.Name = "p" + strconv.Itoa(i)
+			elProp.GenSchema.GoName = exportGoName("P"+strconv.Itoa(i), false, sg.mangler)
 			sg.GenSchema.Properties = append(sg.GenSchema.Properties, elProp.GenSchema)
 			sg.GenSchema.IsTuple = true
 		}
@@ -1392,7 +1424,7 @@ func (sg *schemaGenContext) buildXMLNameWithTags() error {
 	// - consumes/produces in spec contains xml
 	// - struct tags CLI option contains xml
 	// - XML object present in spec for this schema
-	if sg.WithXML || swag.ContainsStrings(sg.StructTags, "xml") || sg.Schema.XML != nil {
+	if sg.WithXML || slices.Contains(sg.StructTags, "xml") || sg.Schema.XML != nil {
 		sg.GenSchema.XMLName = sg.Name
 
 		if sg.Schema.XML != nil {
@@ -1599,7 +1631,7 @@ func (sg schemaGenContext) makeRefName() string {
 	// figure out a longer name for deconflicting anonymous models.
 	// This is used when makeNewStruct() is followed by the creation of a new ref to definitions
 	if sg.UseContainerInName && sg.Container != sg.Name {
-		return sg.Container + swag.ToGoName(sg.Name)
+		return sg.Container + sg.mangler.ToGoName(sg.Name)
 	}
 	return sg.Name
 }
@@ -1689,7 +1721,7 @@ func (sg *schemaGenContext) makeGenSchema() error {
 
 	sg.GenSchema.Example = ""
 	if sg.Schema.Example != nil {
-		data, err := asJSON(sg.Schema.Example)
+		data, err := sg.jsonify(sg.Schema.Example)
 		if err != nil {
 			return err
 		}
@@ -1702,7 +1734,6 @@ func (sg *schemaGenContext) makeGenSchema() error {
 	sg.GenSchema.Path = sg.Path
 	sg.GenSchema.IndexVar = sg.IndexVar
 	sg.GenSchema.Location = body
-	sg.GenSchema.ValueExpression = sg.ValueExpr
 	sg.GenSchema.KeyVar = sg.KeyVar
 	sg.GenSchema.OriginalName = sg.Name
 	sg.GenSchema.Name = sg.GoName()
@@ -1718,8 +1749,11 @@ func (sg *schemaGenContext) makeGenSchema() error {
 	sg.GenSchema.StructTags = sg.StructTags
 	sg.GenSchema.ExtraImports = make(map[string]string)
 	sg.GenSchema.WantsRootedErrorPath = sg.WantsRootedErrorPath
+	sg.GenSchema.WantsStringer = sg.WantsStringer
 	sg.GenSchema.IsElem = sg.IsElem
 	sg.GenSchema.IsProperty = sg.IsProperty
+	sg.GenSchema.GoName = schemaGoName(&sg.Schema, sg.Name, sg.mangler)
+	sg.GenSchema.ValueExpression = sg.ValueExpr
 
 	var err error
 	returns, err := sg.shortCircuitNamedRef()
@@ -1870,6 +1904,14 @@ func (sg *schemaGenContext) makeGenSchema() error {
 	gs := sg.GenSchema
 	sg.GenSchema.WantsMarshalBinary = !gs.IsInterface && !gs.IsStream && !gs.IsBaseType &&
 		(gs.IsTuple || gs.IsComplexObject || gs.IsAdditionalProperties || (gs.IsPrimitive && gs.IsAliased && gs.IsCustomFormatter && !strings.Contains(gs.Zero(), `("`)))
+
+	// generate a fmt.Stringer String() method when the --with-stringer option is set.
+	// This opt-in renders the model field values (as JSON) rather than the Go syntax
+	// representation, so that pointer properties show their value, not their address.
+	// Restricted to the struct/tuple/map shapes that use a pointer receiver, mirroring
+	// MarshalBinary (see issue #872).
+	sg.GenSchema.WantsStringer = sg.WantsStringer && !gs.IsInterface && !gs.IsStream && !gs.IsBaseType &&
+		(gs.IsTuple || gs.IsComplexObject || gs.IsAdditionalProperties)
 
 	debugLogf("finished gen schema for %q", sg.Name)
 

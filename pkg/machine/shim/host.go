@@ -431,6 +431,39 @@ func Stop(mc *vmconfigs.MachineConfig, mp vmconfigs.VMProvider, hardStop bool) e
 	return stopLocked(mc, mp, dirs, hardStop)
 }
 
+// StopThenStart stops and starts the machine while holding its lock.
+func StopThenStart(mc *vmconfigs.MachineConfig, mp vmconfigs.VMProvider, hardStop bool, opts machine.StartOptions, updateSystemConn *bool) error {
+	dirs, err := env.GetMachineDirs(mp.VMType())
+	if err != nil {
+		return err
+	}
+	mc.Lock()
+	defer mc.Unlock()
+	err = mc.Refresh()
+	if err != nil {
+		err = fmt.Errorf("reload config: %w", err)
+		return err
+	}
+
+	err = stopLocked(mc, mp, dirs, hardStop)
+	if err != nil {
+		return err
+	}
+
+	err = mc.Refresh()
+	if err != nil {
+		err = fmt.Errorf("reload config: %w", err)
+		return err
+	}
+
+	callbackFuncs := machine.CleanUp()
+	defer callbackFuncs.CleanIfErr(&err)
+	go callbackFuncs.CleanOnSignal(opts.Quiet)
+
+	err = startLocked(mc, mp, dirs, opts, updateSystemConn, &callbackFuncs)
+	return err
+}
+
 // stopLocked stops the machine and expects the caller to hold the machine's lock.
 func stopLocked(mc *vmconfigs.MachineConfig, mp vmconfigs.VMProvider, dirs *machineDefine.MachineDirs, hardStop bool) error {
 	state, err := mp.State(mc, false)
@@ -476,28 +509,17 @@ func stopLocked(mc *vmconfigs.MachineConfig, mp vmconfigs.VMProvider, dirs *mach
 }
 
 func Start(mc *vmconfigs.MachineConfig, mp vmconfigs.VMProvider, opts machine.StartOptions, updateSystemConn *bool) error {
-	var (
-		err                     error
-		updateDefaultConnection bool
-	)
+	dirs, err := env.GetMachineDirs(mp.VMType())
+	if err != nil {
+		return err
+	}
 
-	defaultBackoff := 500 * time.Millisecond
-	maxBackoffs := 6
-
-	// startup rollaback functions
-	// called if an error occurs or if a
-	// a termination signal is sent
 	callbackFuncs := machine.CleanUp()
 	defer callbackFuncs.CleanIfErr(&err)
 	// The following goroutine will block waiting
 	// for a termination signal. If no signal is received
 	// the routine is aborted when the main goroutine terminates.
 	go callbackFuncs.CleanOnSignal(opts.Quiet)
-
-	dirs, err := env.GetMachineDirs(mp.VMType())
-	if err != nil {
-		return err
-	}
 
 	if !opts.ReExec {
 		mc.Lock()
@@ -521,9 +543,22 @@ func Start(mc *vmconfigs.MachineConfig, mp vmconfigs.VMProvider, opts machine.St
 		defer func() { _ = mcunlock() }()
 	}
 
-	if err = mc.Refresh(); err != nil {
-		return fmt.Errorf("reload config: %w", err)
+	err = mc.Refresh()
+	if err != nil {
+		err = fmt.Errorf("reload config: %w", err)
+		return err
 	}
+
+	err = startLocked(mc, mp, dirs, opts, updateSystemConn, &callbackFuncs)
+	return err
+}
+
+// startLocked starts the machine and expects the caller to hold the machine's lock.
+func startLocked(mc *vmconfigs.MachineConfig, mp vmconfigs.VMProvider, dirs *machineDefine.MachineDirs, opts machine.StartOptions, updateSystemConn *bool, callbackFuncs *machine.CleanupCallback) error {
+	var updateDefaultConnection bool
+
+	defaultBackoff := 500 * time.Millisecond
+	maxBackoffs := 6
 
 	connName := mc.Name
 	if mc.HostUser.Rootful {
@@ -870,7 +905,7 @@ func Remove(mc *vmconfigs.MachineConfig, mp vmconfigs.VMProvider, opts machine.R
 	}
 
 	if err := genericRm(); err != nil {
-		return fmt.Errorf("failed to remove machines files: %v", err)
+		return fmt.Errorf("failed to remove machines files: %w", err)
 	}
 	return nil
 }

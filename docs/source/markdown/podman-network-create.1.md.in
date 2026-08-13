@@ -105,6 +105,13 @@ route.
 $ podman network create --subnet 192.168.33.0/24 --route 10.1.0.0/24,192.168.33.10 --opt no_default_route=true newnet
 ```
 
+Create a bridge network without isolation from other bridge networks (isolation
+defaults to `strict`). The option must be given as `key=value`.
+```
+$ podman network create --opt isolate=false mynet
+mynet
+```
+
 Create a network with a route type blackhole. This means the traffic to the destination subnet will be dropped silently.
 ```
 $ podman network create --route 10.1.0.0/24,blackhole --opt no_default_route=true newnet

@@ -8,15 +8,22 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	flags "github.com/jessevdk/go-flags"
 	"github.com/spf13/viper"
 
 	"github.com/go-openapi/analysis"
-	"github.com/go-openapi/swag"
 
 	"github.com/go-swagger/go-swagger/generator"
+)
+
+const (
+	verboseFlag   = "verbose"
+	noverboseFlag = "noverbose"
+	minimalFlag   = "minimal"
+	fullFlag      = "full"
 )
 
 // FlattenCmdOptions determines options to the flatten spec preprocessing.
@@ -44,10 +51,10 @@ func (f *FlattenCmdOptions) SetFlattenOptions(dflt *analysis.FlattenOpts) (res *
 	}
 	for _, opt := range f.WithFlatten {
 		switch opt {
-		case "verbose":
+		case verboseFlag:
 			res.Verbose = true
 			verboseIsSet = true
-		case "noverbose":
+		case noverboseFlag:
 			if !verboseIsSet {
 				// verbose flag takes precedence
 				res.Verbose = false
@@ -58,13 +65,13 @@ func (f *FlattenCmdOptions) SetFlattenOptions(dflt *analysis.FlattenOpts) (res *
 		case "expand":
 			res.Expand = true
 			expandIsSet = true
-		case "full":
+		case fullFlag:
 			if !minimalIsSet && !expandIsSet {
 				// minimal flag takes precedence
 				res.Minimal = false
 				minimalIsSet = true
 			}
-		case "minimal":
+		case minimalFlag:
 			if !expandIsSet {
 				// expand flag takes precedence
 				res.Minimal = true
@@ -134,6 +141,8 @@ type sharedOptionsCommon struct {
 	DumpData              bool           `description:"when present dumps the json for the template generator instead of generating files" group:"shared"                                            long:"dump-data"`
 	StrictResponders      bool           `description:"Use strict type for the handler return value"                                       long:"strict-responders"`
 	ReturnErrors          bool           `description:"handlers explicitly return an error as the second value"                            group:"shared"                                            long:"return-errors"           short:"e"`
+	Restricted            bool           `description:"Use restricted http client for remote $ref"                                         group:"shared"                                            long:"restricted"`
+	Rooted                string         `description:"Local $ref resolution contained relative to root FS"                                group:"shared"                                            long:"rooted"`
 }
 
 func (s sharedOptionsCommon) apply(opts *generator.GenOpts) {
@@ -149,8 +158,9 @@ func (s sharedOptionsCommon) apply(opts *generator.GenOpts) {
 	opts.StrictResponders = s.StrictResponders
 	opts.ReturnErrors = s.ReturnErrors
 	opts.WithCustomFormatter = s.WithCustomFormatter
-
-	swag.AddInitialisms(s.AdditionalInitialisms...)
+	opts.WithExtraInitialisms = s.AdditionalInitialisms
+	opts.Restricted = s.Restricted
+	opts.Rooted = s.Rooted
 }
 
 func setCopyright(copyrightFile string) (string, error) {
@@ -181,7 +191,9 @@ func createSwagger(s sharedCommand) error {
 		setDebug(cfg) // viper config Debug
 	}
 
-	opts := new(generator.GenOpts)
+	// the config layout (if any) is applied as overrides when the generator
+	// finalizes the options in Prepare.
+	opts := generator.NewGenOpts(generator.WithViper(cfg))
 	s.apply(opts)
 
 	opts.Copyright, err = setCopyright(opts.Copyright)
@@ -191,14 +203,6 @@ func createSwagger(s sharedCommand) error {
 
 	if opts.Template != "" {
 		contribOptionsOverride(opts)
-	}
-
-	if err = opts.EnsureDefaults(); err != nil {
-		return err
-	}
-
-	if err = configureOptsFromConfig(cfg, opts); err != nil {
-		return err
 	}
 
 	if err = s.generate(opts); err != nil {
@@ -238,18 +242,6 @@ func readConfig(filename string) (*viper.Viper, error) {
 	return generator.ReadConfig(abspath)
 }
 
-func configureOptsFromConfig(cfg *viper.Viper, opts *generator.GenOpts) error {
-	if cfg == nil {
-		return nil
-	}
-
-	var def generator.LanguageDefinition
-	if err := cfg.Unmarshal(&def); err != nil {
-		return err
-	}
-	return def.ConfigureOpts(opts)
-}
-
 func setDebug(cfg *viper.Viper) {
 	if os.Getenv("DEBUG") == "" && os.Getenv("SWAGGER_DEBUG") == "" {
 		return
@@ -257,4 +249,46 @@ func setDebug(cfg *viper.Viper) {
 
 	// viper config debug
 	cfg.Debug()
+}
+
+func printImports(extras ...string) string {
+	const allImports = 11
+	imports := make([]string, 0, allImports+len(extras))
+	imports = append(imports,
+		"github.com/go-openapi/errors",
+		"github.com/go-openapi/loads",
+		"github.com/go-openapi/runtime",
+		"github.com/go-openapi/spec",
+		"github.com/go-openapi/strfmt",
+		"github.com/go-openapi/swag/cmdutils",
+		"github.com/go-openapi/swag/conv",
+		"github.com/go-openapi/swag/jsonutils",
+		"github.com/go-openapi/swag/netutils",
+		"github.com/go-openapi/swag/stringutils",
+		"github.com/go-openapi/swag/typeutils",
+	)
+	imports = append(imports, extras...)
+	sort.Strings(imports)
+
+	var w strings.Builder
+	for _, pkg := range imports {
+		if pkg == "" {
+			continue
+		}
+		fmt.Fprintf(&w, "\t* %s\n", pkg)
+	}
+
+	return w.String()
+}
+
+func noticeImports(extras ...string) {
+	log.Println(
+		"Generation completed!",
+		"\n",
+		"For this generation to compile you need to have some packages in your go.mod.",
+		"\n",
+		printImports(extras...),
+		"\n",
+		"You can get these now with: go mod tidy",
+	)
 }

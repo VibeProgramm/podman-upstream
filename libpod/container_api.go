@@ -42,7 +42,7 @@ func (c *Container) Init(ctx context.Context, recursive bool) error {
 	return c.initUnlocked(ctx, recursive)
 }
 
-func (c *Container) initUnlocked(ctx context.Context, recursive bool) error {
+func (c *Container) initUnlocked(ctx context.Context, recursive bool) (retErr error) {
 	if !c.ensureState(define.ContainerStateConfigured, define.ContainerStateStopped, define.ContainerStateExited) {
 		return fmt.Errorf("container %s has already been created in runtime: %w", c.ID(), define.ErrCtrStateInvalid)
 	}
@@ -57,10 +57,15 @@ func (c *Container) initUnlocked(ctx context.Context, recursive bool) error {
 		}
 	}
 
-	if err := c.prepare(); err != nil {
-		if err2 := c.cleanup(ctx); err2 != nil {
-			logrus.Errorf("Cleaning up container %s: %v", c.ID(), err2)
+	defer func() {
+		if retErr != nil {
+			if err := c.cleanup(ctx); err != nil {
+				logrus.Errorf("Cleaning up container %s: %v", c.ID(), err)
+			}
 		}
+	}()
+
+	if err := c.prepare(); err != nil {
 		return err
 	}
 

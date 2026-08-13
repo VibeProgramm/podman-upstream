@@ -174,7 +174,7 @@ var _ = Describe("Podman import", func() {
 		importImage.WaitWithDefaultTimeout()
 		Expect(importImage).To(ExitWithError(125, "open /no/such/file: no such file or directory"))
 
-		result := podmanTest.Podman([]string{"import", "-q", "--signature-policy", "/etc/containers/policy.json", outfile})
+		result := podmanTest.Podman([]string{"import", "-q", "--signature-policy", createPolicyJSONFile(), outfile})
 		result.WaitWithDefaultTimeout()
 		Expect(result).Should(ExitCleanly())
 	})

@@ -305,7 +305,7 @@ test/testvol/testvol: $(wildcard test/testvol/*.go)
 
 .PHONY: volume-plugin-test-img
 volume-plugin-test-img:
-	./bin/podman build --network none -t quay.io/libpod/volume-plugin-test-img:$$(date +%Y%m%d) -f ./test/testvol/Containerfile .
+	./bin/podman build --network none --platform=linux/amd64,linux/arm64,linux/ppc64le,linux/s390x --manifest quay.io/libpod/volume-plugin-test-img:$$(date +%Y%m%d) -f ./test/testvol/Containerfile .
 
 .PHONY: test/goecho/goecho
 test/goecho/goecho: $(wildcard test/goecho/*.go)
@@ -670,7 +670,7 @@ run-docker-py-tests:
 	rm -f test/__init__.py
 
 .PHONY: localunit
-localunit: test/goecho/goecho test/version/version ## Run unit tests with coverage
+localunit: .install.ginkgo test/goecho/goecho test/version/version ## Run unit tests with coverage
 	rm -rf ${COVERAGE_PATH} && mkdir -p ${COVERAGE_PATH}
 	UNIT=1 $(GINKGO) \
 		-r \

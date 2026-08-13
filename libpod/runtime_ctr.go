@@ -11,6 +11,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -298,9 +299,8 @@ func (r *Runtime) setupContainer(ctx context.Context, ctr *Container) (_ *Contai
 					return nil, errors.New("failed to find free network interface name")
 				}
 			}
-			network.Aliases = append(network.Aliases, getExtraNetworkAliases(ctr)...)
-
 			network.Name = netName
+			network.Aliases = slices.Compact(slices.Sorted(slices.Values(network.Aliases)))
 			normalizeNetworks = append(normalizeNetworks, network)
 		}
 		ctr.config.Networks = normalizeNetworks

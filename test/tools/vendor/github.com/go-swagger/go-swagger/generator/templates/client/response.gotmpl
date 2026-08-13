@@ -22,7 +22,7 @@ func New{{ pascalize .Name }}({{ if eq .Code -1 }}code int{{ end }}{{ if .Schema
     {{- end }}
     {{ range .Headers }}
       {{- if .HasDefault }}
-    {{ pascalize .Name}}: {{ if and (not .IsArray) (not .HasDiscriminator) (not .IsInterface) (not .IsStream) .IsNullable }}&{{ end }}{{ varname .ID }}Default,
+    {{ .ID }}: {{ if and (not .IsArray) (not .HasDiscriminator) (not .IsInterface) (not .IsStream) .IsNullable }}&{{ end }}{{ varname .ID }}Default,
       {{- end }}
     {{- end }}
     {{- if .Schema }}
@@ -33,10 +33,9 @@ func New{{ pascalize .Name }}({{ if eq .Code -1 }}code int{{ end }}{{ if .Schema
     }
 }
 
-/* {{ pascalize .Name}} describes a response with status code {{ .Code }}, with default header values.
-
- {{ if .Description }}{{ blockcomment .Description }}{{else}}{{ pascalize .Name }} {{ humanize .Name }}{{end}}
- */
+{{ lineComment (printf "%s describes a response with status code %v, with default header values." (pascalize .Name) .Code) }}
+//
+{{ if .Description }}{{ lineComment .Description }}{{ else }}{{ lineComment (pascalize .Name) " " (humanize .Name) }}{{ end }}
 type {{ pascalize .Name }} struct {
   {{- if eq .Code -1 }}
   _statusCode int
@@ -44,19 +43,18 @@ type {{ pascalize .Name }} struct {
   {{- range .Headers }}
     {{- if .Description }}
 
-  /* {{ blockcomment .Description }}
+{{ lineComment .Description }}
      {{- if or .SwaggerFormat .Default }}
-       {{ print "" }}
+//
        {{- if .SwaggerFormat }}
-     Format: {{ .SwaggerFormat }}
+{{ lineComment "Format: " .SwaggerFormat }}
        {{- end }}
        {{- if .Default }}
-     Default: {{ json .Default }}
+// Default: {{ json .Default }}
        {{- end }}
      {{- end }}
-  */
     {{- end }}
-  {{ pascalize .Name }} {{ .GoType }}
+  {{ .ID }} {{ .GoType }}
   {{- end }}
   {{- if .Schema }}
 
@@ -122,14 +120,14 @@ func ({{ .ReceiverName }} *{{ pascalize .Name }}) Error() string {
   {{- if .Schema }}{{ if (not .Schema.IsStream) }}
   payload, _ := json.Marshal(o.Payload)
   {{- end }}{{- end }}
-	return fmt.Sprintf("[{{ upper .Method }} {{ .Path }}][%d]{{ if .Name }} {{ .Name }}{{ else }} unknown error{{ end }}{{ if .Schema }}{{ if not .Schema.IsStream }} %s{{ end }}{{ end }}", {{ if eq .Code -1 }}{{ .ReceiverName }}._statusCode{{ else }}{{ .Code }}{{ end }}{{ if .Schema }}{{ if not .Schema.IsStream }}, payload{{ end }}{{ end }})
+	return fmt.Sprintf("[{{ upper .Method }} {{ escapeDoubleQuoted .Path }}][%d]{{ if .Name }} {{ .Name }}{{ else }} unknown error{{ end }}{{ if .Schema }}{{ if not .Schema.IsStream }} %s{{ end }}{{ end }}", {{ if eq .Code -1 }}{{ .ReceiverName }}._statusCode{{ else }}{{ .Code }}{{ end }}{{ if .Schema }}{{ if not .Schema.IsStream }}, payload{{ end }}{{ end }})
 }
 
 func ({{ .ReceiverName }} *{{ pascalize .Name }}) String() string {
   {{- if .Schema }}{{ if (not .Schema.IsStream) }}
   payload, _ := json.Marshal(o.Payload)
   {{- end }}{{- end }}
-	return fmt.Sprintf("[{{ upper .Method }} {{ .Path }}][%d]{{ if .Name }} {{ .Name }}{{ else }} unknown response{{ end }}{{ if .Schema }}{{ if not .Schema.IsStream }} %s{{ end }}{{ end }}", {{ if eq .Code -1 }}{{ .ReceiverName }}._statusCode{{ else }}{{ .Code }}{{ end }}{{ if .Schema }}{{ if not .Schema.IsStream }}, payload{{ end }}{{ end }})
+	return fmt.Sprintf("[{{ upper .Method }} {{ escapeDoubleQuoted .Path }}][%d]{{ if .Name }} {{ .Name }}{{ else }} unknown response{{ end }}{{ if .Schema }}{{ if not .Schema.IsStream }} %s{{ end }}{{ end }}", {{ if eq .Code -1 }}{{ .ReceiverName }}._statusCode{{ else }}{{ .Code }}{{ end }}{{ if .Schema }}{{ if not .Schema.IsStream }}, payload{{ end }}{{ end }})
 }
 
 {{ if .Schema }}
@@ -142,7 +140,7 @@ func ({{ .ReceiverName }} *{{ pascalize .Name }}) readResponse(response runtime.
   {{- range .Headers }}
 
   // hydrates response header {{.Name}}
-  hdr{{ pascalize .Name }} := response.GetHeader("{{ .Name }}")
+  hdr{{ pascalize .Name }} := response.GetHeader({{ printf "%q" .Name }})
 
   if hdr{{ pascalize .Name }} != "" {
     {{- if .Converter }}
@@ -150,16 +148,16 @@ func ({{ .ReceiverName }} *{{ pascalize .Name }}) readResponse(response runtime.
   if err != nil {
     return errors.InvalidType({{ .Path }}, "header", "{{ .GoType }}", hdr{{ pascalize .Name }})
   }
-  {{ .ReceiverName }}.{{ pascalize .Name }} = val{{ camelize .Name }}
+  {{ .ReceiverName }}.{{ .ID }} = val{{ camelize .Name }}
     {{- else if .Child }}
 
   // binding header items for {{ .Name }}
-  val{{ pascalize .Name }}, err := {{ .ReceiverName }}.bindHeader{{ pascalize .Name }}(hdr{{ pascalize .Name }}, formats)
+  val{{ pascalize .Name }}, err := {{ .ReceiverName }}.bindHeader{{ .ID }}(hdr{{ pascalize .Name }}, formats)
   if err != nil {
     return err
   }
 
-  {{ .ReceiverName }}.{{ pascalize .Name }} = val{{ pascalize .Name }}
+  {{ .ReceiverName }}.{{ .ID }} = val{{ pascalize .Name }}
     {{- else if .IsCustomFormatter }}
   val{{ camelize .Name }}, err := formats.Parse({{ printf "%q" .SwaggerFormat }}, hdr{{ pascalize .Name }})
   if err != nil {
@@ -167,15 +165,15 @@ func ({{ .ReceiverName }} *{{ pascalize .Name }}) readResponse(response runtime.
   }
       {{- if .IsNullable }}
   v := (val{{ camelize .Name }}.({{ .GoType }}))
-  {{ .ReceiverName }}.{{ pascalize .Name }} = &v
+  {{ .ReceiverName }}.{{ .ID }} = &v
       {{- else }}
-  {{ .ReceiverName }}.{{ pascalize .Name }} = *(val{{ camelize .Name }}.(*{{ .GoType }}))
+  {{ .ReceiverName }}.{{ .ID }} = *(val{{ camelize .Name }}.(*{{ .GoType }}))
       {{- end }}
     {{- else }}
       {{- if eq .GoType "string" }}
-  {{ .ReceiverName }}.{{ pascalize .Name }} = hdr{{ pascalize .Name }}
+  {{ .ReceiverName }}.{{ .ID }} = hdr{{ pascalize .Name }}
       {{- else }}
-  {{ .ReceiverName }}.{{ pascalize .Name }} = {{ .GoType }}(hdr{{ pascalize .Name }})
+  {{ .ReceiverName }}.{{ .ID }} = {{ .GoType }}(hdr{{ pascalize .Name }})
       {{- end }}
     {{- end }}
   }
@@ -209,7 +207,7 @@ func ({{ .ReceiverName }} *{{ pascalize .Name }}) readResponse(response runtime.
     {{- if .Child }}
 
 // bindHeader{{ pascalize $.Name }} binds the response header {{ .Name }}
-func ({{ .ReceiverName }} *{{ pascalize $.Name }}) bindHeader{{ pascalize .Name }}(hdr string, formats strfmt.Registry) ({{ .GoType }}, error) {
+func ({{ .ReceiverName }} *{{ pascalize $.Name }}) bindHeader{{ .ID }}(hdr string, formats strfmt.Registry) ({{ .GoType }}, error) {
   {{ varname .Child.ValueExpression }}V := hdr
 
   {{ template "sliceclientheaderbinder" . }}
@@ -222,7 +220,7 @@ func ({{ .ReceiverName }} *{{ pascalize $.Name }}) bindHeader{{ pascalize .Name 
 {{"// Code generated by go-swagger; DO NOT EDIT."}}
 
 
-{{ if .Copyright -}}// {{ comment .Copyright -}}{{ end }}
+{{ if .Copyright -}}{{ lineComment .Copyright -}}{{ end }}
 
 
 package {{ .Package }}
@@ -235,9 +233,11 @@ import (
   "github.com/go-openapi/errors"
   "github.com/go-openapi/runtime"
   "github.com/go-openapi/strfmt"
-  "github.com/go-openapi/swag"
+  "github.com/go-openapi/swag/conv"
+  "github.com/go-openapi/swag/jsonutils"
+  "github.com/go-openapi/swag/stringutils"
+  "github.com/go-openapi/swag/typeutils"
   "github.com/go-openapi/validate"
-
   {{ imports .DefaultImports }}
   {{ imports .Imports }}
 )
@@ -281,7 +281,7 @@ func ({{ .ReceiverName }} *{{ pascalize .Name }}Reader) ReadResponse(response ru
     {{- if $.Responses}}
     default:
     {{- end }}
-      return nil, runtime.NewAPIError("[{{ upper .Method }} {{ .Path }}]{{ if .Name }} {{ .Name }}{{ end }}", response, response.Code())
+      return nil, runtime.NewAPIError("[{{ upper .Method }} {{ escapeDoubleQuoted .Path }}]{{ if .Name }} {{ .Name }}{{ end }}", response, response.Code())
   {{- end }}
   {{- if .Responses}}
   }
@@ -296,9 +296,9 @@ func ({{ .ReceiverName }} *{{ pascalize .Name }}Reader) ReadResponse(response ru
 {{ end }}
 
 {{ range .ExtraSchemas }}
-/*{{ pascalize .Name }} {{ template "docstring" . }}
-swagger:model {{ .Name }}
-*/
+{{ template "docstring" (dict "Ctx" . "Lead" (printf "%s " .GoName)) }}
+//
+// swagger:model {{ .Name }}
   {{- template "schema" . }}
 {{- end }}
 
@@ -308,7 +308,7 @@ swagger:model {{ .Name }}
    {{ varname .Child.ValueExpression }}C {{ .GoType }}
  )
  // {{ .Child.ItemsDepth }}CollectionFormat: {{ printf "%q" .CollectionFormat }}
- {{ varname .Child.ValueExpression }}R := swag.SplitByFormat({{ varname .Child.ValueExpression }}V, {{ printf "%q" .CollectionFormat }})
+ {{ varname .Child.ValueExpression }}R := stringutils.SplitByFormat({{ varname .Child.ValueExpression }}V, {{ printf "%q" .CollectionFormat }})
 
  for {{ if or .Child.IsCustomFormatter .Child.Converter }}{{ .IndexVar }}{{ else }}_{{ end }}, {{ varname .Child.ValueExpression }}IV := range {{ varname .Child.ValueExpression }}R {
    {{ template "sliceclientheaderbinder" .Child }}

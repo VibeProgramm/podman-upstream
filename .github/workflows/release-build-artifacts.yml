@@ -54,7 +54,7 @@ jobs:
       version_display: ${{ steps.set-version.outputs.version_display }}
     steps:
     - name: Checkout Version
-      uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       with:
         ref: ${{ inputs.version }}
         persist-credentials: false
@@ -77,7 +77,7 @@ jobs:
     needs: [get-version]
     steps:
     - name: Checkout Version
-      uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       with:
         ref: ${{ inputs.version }}
         persist-credentials: false
@@ -117,7 +117,7 @@ jobs:
       KEYCHAIN_PWD: ${{ secrets.MACOS_CI_KEYCHAIN_PWD }}
     steps:
     - name: Checkout Version
-      uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       with:
         ref: ${{ inputs.version }}
         persist-credentials: false
@@ -159,7 +159,7 @@ jobs:
     needs: [get-version, build-artifacts]
     steps:
     - name: Checkout Podman
-      uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       with:
         ref: ${{ inputs.version }}
         persist-credentials: false
