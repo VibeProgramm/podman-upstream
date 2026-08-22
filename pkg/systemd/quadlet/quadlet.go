@@ -225,6 +225,10 @@ type UnitInfo struct {
 	// For .pod units
 	// List of containers to start with the pod
 	ContainersToStart []string
+
+	// For .pod units
+	// Whether the pod uses socket activation (SocketActivationPort)
+	SocketActivated bool
 }
 
 type GroupInfo struct {
@@ -641,6 +645,13 @@ func validateServiceType(service *parser.UnitFile) (string, error) {
 		return serviceType, fmt.Errorf("invalid service Type '%s'", serviceType)
 	}
 	return serviceType, nil
+}
+
+// PodHasSocketActivation reports whether the given pod unit file uses socket
+// activation, based on the resolved hasSAP result (which accounts for cases
+// such as Network=host that disable socket activation).
+func PodHasSocketActivation(podUnit *parser.UnitFile) bool {
+	return resolveAndValidateSAP(podUnit, PodGroup, nil).HasSAP
 }
 
 // resolveAndValidateSAP resolves SocketActivationPort entries and validates compatibility.
@@ -2782,7 +2793,16 @@ func handlePod(quadletUnitFile, serviceUnitFile *parser.UnitFile, groupName stri
 		podman.add("--pod", podInfo.ResourceName)
 
 		podServiceName := podInfo.ServiceFileName()
-		serviceUnitFile.Add(UnitGroup, "BindsTo", podServiceName)
+		// A container in a socket-activated pod must not bind to the pod
+		// lifecycle: BindsTo would create a BoundBy= dependency on the pod
+		// that keeps it "needed" forever and prevents StopWhenUnneeded=yes
+		// from ever firing. Use PartOf= instead, which still propagates the
+		// stop when the pod stops, but does not pin it.
+		if podInfo.SocketActivated {
+			serviceUnitFile.Add(UnitGroup, "PartOf", podServiceName)
+		} else {
+			serviceUnitFile.Add(UnitGroup, "BindsTo", podServiceName)
+		}
 		serviceUnitFile.Add(UnitGroup, "After", podServiceName)
 
 		// If we want to start the container with the pod, we add it to this list.

@@ -693,3 +693,35 @@ func TestSocketIdleTimeout(t *testing.T) {
 		assert.Equal(t, "no", stopWhenUnneeded, "user override should be preserved")
 	})
 }
+
+func TestPodContainerSocketActivationDependency(t *testing.T) {
+	t.Run("socket-activated pod uses PartOf instead of BindsTo", func(t *testing.T) {
+		u := makeContainerUnit("test.container", "[Container]\nImage=test\nPod=test.pod\n")
+		unitsInfoMap := map[string]*UnitInfo{
+			"test.container": {ServiceName: "test", ResourceName: "systemd-test"},
+			"test.pod":       {ServiceName: "test-pod", ResourceName: "systemd-test-pod", SocketActivated: true},
+		}
+
+		svc, _, err, _ := ConvertContainer(u, unitsInfoMap, false)
+		require.NoError(t, err)
+
+		require.Contains(t, svc.LookupAll("Unit", "After"), "test-pod.service", "After should reference the pod")
+		require.Contains(t, svc.LookupAll("Unit", "PartOf"), "test-pod.service", "PartOf should reference the pod for socket-activated pod")
+		assert.False(t, svc.HasKey("Unit", "BindsTo"), "BindsTo should not be set for a socket-activated pod")
+	})
+
+	t.Run("regular pod keeps BindsTo", func(t *testing.T) {
+		u := makeContainerUnit("test.container", "[Container]\nImage=test\nPod=test.pod\n")
+		unitsInfoMap := map[string]*UnitInfo{
+			"test.container": {ServiceName: "test", ResourceName: "systemd-test"},
+			"test.pod":       {ServiceName: "test-pod", ResourceName: "systemd-test-pod"},
+		}
+
+		svc, _, err, _ := ConvertContainer(u, unitsInfoMap, false)
+		require.NoError(t, err)
+
+		require.Contains(t, svc.LookupAll("Unit", "After"), "test-pod.service", "After should reference the pod")
+		require.Contains(t, svc.LookupAll("Unit", "BindsTo"), "test-pod.service", "BindsTo should reference the pod for a regular pod")
+		assert.False(t, svc.HasKey("Unit", "PartOf"), "PartOf should not be set for a regular pod")
+	})
+}

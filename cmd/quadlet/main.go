@@ -374,6 +374,7 @@ func generateUnitsInfoMap(units []*parser.UnitFile) map[string]*quadlet.UnitInfo
 		var serviceName string
 		var containers []string
 		var resourceName string
+		var socketActivated bool
 		var err error
 
 		serviceName, err = quadlet.GetUnitServiceName(unit)
@@ -398,6 +399,7 @@ func generateUnitsInfoMap(units []*parser.UnitFile) map[string]*quadlet.UnitInfo
 			// Prefill resourceNames for .pod files.
 			// This is requires for referencing the pod from .container files
 			resourceName = quadlet.GetPodResourceName(unit)
+			socketActivated = quadlet.PodHasSocketActivation(unit)
 		case strings.HasSuffix(unit.Filename, ".volume"), strings.HasSuffix(unit.Filename, ".kube"), strings.HasSuffix(unit.Filename, ".network"), strings.HasSuffix(unit.Filename, ".image"):
 			// Do nothing for these case.
 		default:
@@ -409,6 +411,7 @@ func generateUnitsInfoMap(units []*parser.UnitFile) map[string]*quadlet.UnitInfo
 			ServiceName:       serviceName,
 			ContainersToStart: containers,
 			ResourceName:      resourceName,
+			SocketActivated:   socketActivated,
 		}
 	}
 
