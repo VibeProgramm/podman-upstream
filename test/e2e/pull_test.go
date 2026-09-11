@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"runtime"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -323,6 +324,8 @@ var _ = Describe("Podman pull", func() {
 	})
 
 	pullChunkedTests()
+
+	pullMirrorFallbackTests()
 
 	It("podman pull from docker-archive", func() {
 		SkipIfNotAMD64() // https://github.com/containers/podman/issues/28273
@@ -660,7 +663,7 @@ var _ = Describe("Podman pull", func() {
 
 			session := decryptionTestHelper(imgPath)
 
-			Expect(session.LineInOutputContainsTag("localhost/name", "tag")).To(BeTrue())
+			Expect(session.OutputToStringArray()).To(ContainElement(MatchRegexp(`^localhost/name\s+tag\s`)))
 		})
 
 		It("From local registry", func() {
@@ -690,7 +693,7 @@ var _ = Describe("Podman pull", func() {
 
 			session = decryptionTestHelper(imgPath)
 
-			Expect(session.LineInOutputContainsTag(imgPath, "latest")).To(BeTrue())
+			Expect(session.OutputToStringArray()).To(ContainElement(MatchRegexp("^" + regexp.QuoteMeta(imgPath) + `\s+latest\s`)))
 		})
 	})
 })

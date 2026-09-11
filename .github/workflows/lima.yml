@@ -32,7 +32,7 @@ env:
   # CI automation repo release for the VM image downloads in ci.sh.
   # ENV is managed by renovate, do not change the name without
   # updating the renovate config in the automation repo.
-  AUTOMATION_RELEASE: 20260811t132028z
+  AUTOMATION_RELEASE: 20260902t121119z
   # Needed for logformatter
   PR_NUMBER: ${{ github.event.pull_request.number || '' }}
   PR_TITLE: ${{ github.event.pull_request.title || ''  }}
@@ -62,6 +62,12 @@ jobs:
         id: lima
         with:
           version: v2.1.1
+
+      # lima action setup fails sometimes with "chown: cannot access '/dev/kvm': No such file or directory"
+      # Add logs to debug this error and see if the module loading failed somehow
+      - name: "Run dmesg on failure"
+        if: failure()
+        run: sudo dmesg
 
       # NOTE, we are not using a cache here as documented in the lima action.
       # This is because our VM images are above 5GB and the total github limit is 10 GB which means

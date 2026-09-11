@@ -3,9 +3,10 @@
 package integration
 
 import (
+	"cmp"
 	"encoding/json"
 	"fmt"
-	"sort"
+	"slices"
 	"strings"
 
 	"github.com/docker/go-units"
@@ -49,13 +50,14 @@ var _ = Describe("Podman images", func() {
 		session = podmanTest.Podman([]string{"images"})
 		session.WaitWithDefaultTimeout()
 		Expect(session).Should(ExitCleanly())
-		Expect(session.LineInOutputContainsTag("quay.io/libpod/alpine", "latest")).To(BeTrue())
-		Expect(session.LineInOutputContainsTag("quay.io/libpod/busybox", "latest")).To(BeTrue())
-		Expect(session.LineInOutputContainsTag("localhost/foo", "a")).To(BeTrue())
-		Expect(session.LineInOutputContainsTag("localhost/foo", "b")).To(BeTrue())
-		Expect(session.LineInOutputContainsTag("localhost/foo", "c")).To(BeTrue())
-		Expect(session.LineInOutputContainsTag("localhost/bar", "a")).To(BeTrue())
-		Expect(session.LineInOutputContainsTag("localhost/bar", "b")).To(BeTrue())
+		images := session.OutputToStringArray()
+		Expect(images).To(ContainElement(MatchRegexp(`^quay\.io/libpod/alpine\s+latest\s`)))
+		Expect(images).To(ContainElement(MatchRegexp(`^quay\.io/libpod/busybox\s+latest\s`)))
+		Expect(images).To(ContainElement(MatchRegexp(`^localhost/foo\s+a\s`)))
+		Expect(images).To(ContainElement(MatchRegexp(`^localhost/foo\s+b\s`)))
+		Expect(images).To(ContainElement(MatchRegexp(`^localhost/foo\s+c\s`)))
+		Expect(images).To(ContainElement(MatchRegexp(`^localhost/bar\s+a\s`)))
+		Expect(images).To(ContainElement(MatchRegexp(`^localhost/bar\s+b\s`)))
 		session = podmanTest.Podman([]string{"images", "-qn"})
 		session.WaitWithDefaultTimeout()
 		Expect(session).Should(ExitCleanly())
@@ -322,24 +324,22 @@ WORKDIR /test
 		}
 
 		sortedArr := sortValueTest("created", 0, "CreatedAt")
-		Expect(sort.SliceIsSorted(sortedArr, func(i, j int) bool { return sortedArr[i] > sortedArr[j] })).To(BeTrue())
+		Expect(slices.IsSortedFunc(sortedArr, func(a, b string) int { return cmp.Compare(b, a) })).To(BeTrue())
 
 		sortedArr = sortValueTest("id", 0, "ID")
-		Expect(sort.SliceIsSorted(sortedArr, func(i, j int) bool { return sortedArr[i] < sortedArr[j] })).To(BeTrue())
+		Expect(slices.IsSorted(sortedArr)).To(BeTrue())
 
 		sortedArr = sortValueTest("repository", 0, "Repository")
-		Expect(sort.SliceIsSorted(sortedArr, func(i, j int) bool { return sortedArr[i] < sortedArr[j] })).To(BeTrue())
+		Expect(slices.IsSorted(sortedArr)).To(BeTrue())
 
 		sortedArr = sortValueTest("size", 0, "Size")
-		Expect(sort.SliceIsSorted(sortedArr, func(i, j int) bool {
-			size1, _ := units.FromHumanSize(sortedArr[i])
-			size2, _ := units.FromHumanSize(sortedArr[j])
-			return size1 < size2
+		Expect(slices.IsSortedFunc(sortedArr, func(a, b string) int {
+			size1, _ := units.FromHumanSize(a)
+			size2, _ := units.FromHumanSize(b)
+			return cmp.Compare(size1, size2)
 		})).To(BeTrue())
 		sortedArr = sortValueTest("tag", 0, "Tag")
-		Expect(sort.SliceIsSorted(sortedArr,
-			func(i, j int) bool { return sortedArr[i] < sortedArr[j] })).
-			To(BeTrue())
+		Expect(slices.IsSorted(sortedArr)).To(BeTrue())
 
 		sortValueTest("badvalue", 125, "Tag")
 		sortValueTest("id", 125, "badvalue")
@@ -491,6 +491,31 @@ RUN > file2
 		// check if really abc is removed
 		result = podmanTest.Podman([]string{"image", "list", "--filter", "label=abc"})
 		Expect(result.OutputToStringArray()).To(BeEmpty())
+	})
+
+	It("podman image prune --filter label=key=value", func() {
+		dockerfile := `FROM quay.io/libpod/alpine:latest
+RUN > file
+`
+		dockerfile2 := `FROM quay.io/libpod/alpine:latest
+RUN > file2
+`
+		podmanTest.BuildImageWithLabel(dockerfile, "foobar.com/workdir:latest", "false", "version=1.0")
+		podmanTest.BuildImageWithLabel(dockerfile2, "foobar.com/workdir:latest", "false", "version=2.0")
+
+		result := podmanTest.Podman([]string{"image", "prune", "--filter", "label=version=1.0", "--force"})
+		result.WaitWithDefaultTimeout()
+		Expect(result).Should(ExitCleanly())
+		Expect(result.OutputToStringArray()).To(HaveLen(1))
+
+		// only version=1.0 should be gone; version=2.0 must survive
+		result = podmanTest.Podman([]string{"image", "list", "--filter", "label=version=1.0"})
+		Expect(result.OutputToStringArray()).To(BeEmpty())
+
+		result = podmanTest.Podman([]string{"image", "list", "--filter", "label=version=2.0", "-q"})
+		result.WaitWithDefaultTimeout()
+		Expect(result).Should(ExitCleanly())
+		Expect(result.OutputToStringArray()).To(HaveLen(1))
 	})
 
 	It("podman builder prune", func() {

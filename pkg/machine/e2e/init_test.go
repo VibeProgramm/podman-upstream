@@ -2,6 +2,7 @@ package e2e_test
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -112,7 +113,7 @@ var _ = Describe("podman machine init", func() {
 		Expect(err).ToNot(HaveOccurred())
 		Expect(session).To(Exit(0))
 
-		inspectBefore, ec, err := mb.toQemuInspectInfo()
+		inspectBefore, ec, err := mb.toInspectInfo()
 		Expect(err).ToNot(HaveOccurred())
 		Expect(ec).To(BeZero())
 		Expect(inspectBefore).ToNot(BeEmpty())
@@ -197,42 +198,6 @@ var _ = Describe("podman machine init", func() {
 		Expect(sshSession.outputToString()).To(Equal(str))
 	})
 
-	It("simple init with start", func() {
-		i := initMachine{}
-		session, err := mb.setCmd(i.withImage(mb.imagePath)).run()
-		Expect(err).ToNot(HaveOccurred())
-		Expect(session).To(Exit(0))
-
-		inspectBefore, ec, err := mb.toQemuInspectInfo()
-		Expect(ec).To(BeZero())
-		Expect(inspectBefore).ToNot(BeEmpty())
-		Expect(err).ToNot(HaveOccurred())
-		Expect(inspectBefore).ToNot(BeEmpty())
-		Expect(inspectBefore[0].Name).To(Equal(mb.names[0]))
-
-		s := &startMachine{}
-		ssession, err := mb.setCmd(s).setTimeout(time.Minute * 10).run()
-		Expect(err).ToNot(HaveOccurred())
-		Expect(ssession).Should(Exit(0))
-
-		inspectAfter, ec, err := mb.toQemuInspectInfo()
-		Expect(err).ToNot(HaveOccurred())
-		Expect(ec).To(BeZero())
-		Expect(inspectBefore).ToNot(BeEmpty())
-		Expect(inspectAfter).ToNot(BeEmpty())
-		Expect(inspectAfter[0].State).To(Equal(define.Running))
-
-		if isWSL() { // WSL does not use FCOS
-			return
-		}
-
-		// check to see that zincati is masked
-		sshDisk := sshMachine{}
-		zincati, err := mb.setCmd(sshDisk.withSSHCommand([]string{"sudo", "systemctl", "is-enabled", "zincati"})).run()
-		Expect(err).ToNot(HaveOccurred())
-		Expect(zincati.outputToString()).To(ContainSubstring("disabled"))
-	})
-
 	It("simple init with username", func() {
 		i := new(initMachine)
 		remoteUsername := "remoteuser"
@@ -240,7 +205,7 @@ var _ = Describe("podman machine init", func() {
 		Expect(err).ToNot(HaveOccurred())
 		Expect(session).To(Exit(0))
 
-		inspectBefore, ec, err := mb.toQemuInspectInfo()
+		inspectBefore, ec, err := mb.toInspectInfo()
 		Expect(err).ToNot(HaveOccurred())
 		Expect(ec).To(BeZero())
 
@@ -287,6 +252,16 @@ var _ = Describe("podman machine init", func() {
 				subid_count, count_min, file,
 			)
 		}
+
+		if isWSL() { // WSL does not use FCOS
+			return
+		}
+
+		// check to see that zincati is masked
+		sshDisk := sshMachine{}
+		zincati, err := mb.setCmd(sshDisk.withSSHCommand([]string{"sudo", "systemctl", "is-enabled", "zincati"})).run()
+		Expect(err).ToNot(HaveOccurred())
+		Expect(zincati.outputToString()).To(ContainSubstring("disabled"))
 	})
 
 	It("machine init with cpus, disk size, memory, timezone", func() {
@@ -441,7 +416,7 @@ var _ = Describe("podman machine init", func() {
 		Expect(session).To(Exit(0))
 
 		s := &startMachine{}
-		ssession, err := mb.setCmd(s).setTimeout(time.Minute * 10).run()
+		ssession, err := mb.setCmd(s).run()
 		Expect(err).ToNot(HaveOccurred())
 		Expect(ssession).Should(Exit(0))
 
@@ -463,7 +438,7 @@ var _ = Describe("podman machine init", func() {
 		Expect(session).To(Exit(0))
 
 		s := &startMachine{}
-		ssession, err := mb.setCmd(s).setTimeout(time.Minute * 10).run()
+		ssession, err := mb.setCmd(s).run()
 		Expect(err).ToNot(HaveOccurred())
 		Expect(ssession).Should(Exit(0))
 
@@ -512,7 +487,7 @@ var _ = Describe("podman machine init", func() {
 
 		// Inspecting a non-existent machine should fail
 		// which means it is gone
-		_, ec, err := mb.toQemuInspectInfo()
+		_, ec, err := mb.toInspectInfo()
 		Expect(err).ToNot(HaveOccurred())
 		Expect(ec).To(Equal(125))
 
@@ -605,7 +580,7 @@ var _ = Describe("podman machine init", func() {
 		Expect(session).To(Exit(0))
 
 		s := &startMachine{}
-		ssession, err := mb.setCmd(s).setTimeout(time.Minute * 10).run()
+		ssession, err := mb.setCmd(s).run()
 		Expect(err).ToNot(HaveOccurred())
 		Expect(ssession).Should(Exit(0))
 
@@ -656,7 +631,7 @@ var _ = Describe("podman machine init", func() {
 		Expect(session).To(Exit(0))
 
 		s := &startMachine{}
-		ssession, err := mb.setCmd(s).setTimeout(time.Minute * 10).run()
+		ssession, err := mb.setCmd(s).run()
 		Expect(err).ToNot(HaveOccurred())
 		Expect(ssession).Should(Exit(0))
 
@@ -741,6 +716,37 @@ var _ = Describe("podman machine init", func() {
 			}
 			Expect(p).To(Equal(l.VMType))
 		}
+	})
+
+	It("init with read-only image should succeed", func() {
+		// Step 1: create temp image
+		img := filepath.Join(GinkgoT().TempDir(), "test.qcow2")
+
+		// Step 2: copy existing image and make it read-only
+		src, err := os.Open(mb.imagePath)
+		Expect(err).ToNot(HaveOccurred())
+
+		dst, err := os.Create(img)
+		Expect(err).ToNot(HaveOccurred())
+
+		_, err = io.Copy(dst, src)
+		Expect(err).ToNot(HaveOccurred())
+
+		err = dst.Close()
+		Expect(err).ToNot(HaveOccurred())
+
+		err = src.Close()
+		Expect(err).ToNot(HaveOccurred())
+
+		err = os.Chmod(img, 0o444)
+		Expect(err).ToNot(HaveOccurred())
+
+		// Step 3: run podman machine init
+		i := new(initMachine)
+		session, err := mb.setCmd(i.withImage(img)).run()
+
+		Expect(err).ToNot(HaveOccurred())
+		Expect(session).To(Exit(0))
 	})
 })
 
