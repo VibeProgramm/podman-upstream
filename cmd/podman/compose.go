@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -44,12 +45,12 @@ func init() {
 	registry.Commands = append(registry.Commands, registry.CliCommand{Command: composeCommand})
 }
 
-func composeCompletion(_ *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
+func composeCompletion(cmd *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
 	var stdout strings.Builder
 
 	args = append(args, toComplete)
 	args = append([]string{"__complete"}, args...)
-	if err := composeProviderExec(args, &stdout, io.Discard, false); err != nil {
+	if err := composeProviderExec(cmd.Context(), args, &stdout, io.Discard, false); err != nil {
 		// Ignore errors since some providers may not expose a __complete command.
 		return nil, cobra.ShellCompDirectiveError
 	}
@@ -188,7 +189,7 @@ func underline(str string) string {
 }
 
 // composeProviderExec executes the compose provider with the specified arguments.
-func composeProviderExec(args []string, stdout io.Writer, stderr io.Writer, warn bool) error {
+func composeProviderExec(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer, warn bool) error {
 	provider, err := composeProvider()
 	if err != nil {
 		return err
@@ -206,7 +207,7 @@ func composeProviderExec(args []string, stdout io.Writer, stderr io.Writer, warn
 		stderr = os.Stderr
 	}
 
-	cmd := exec.Command(provider, args...)
+	cmd := exec.CommandContext(ctx, provider, args...)
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = stdout
 	cmd.Stderr = stderr
@@ -245,7 +246,7 @@ func composeHelp(cmd *cobra.Command) error {
 	if err != nil {
 		return err
 	}
-	return composeProviderExec([]string{"--help"}, nil, nil, shouldLog)
+	return composeProviderExec(cmd.Context(), []string{"--help"}, nil, nil, shouldLog)
 }
 
 // composeMain is the main function of the compose command.
@@ -269,5 +270,5 @@ func composeMain(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
-	return composeProviderExec(args, nil, nil, shouldLog)
+	return composeProviderExec(cmd.Context(), args, nil, nil, shouldLog)
 }

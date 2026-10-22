@@ -87,7 +87,7 @@ func (s *APIServer) registerContainersHandlers(r *mux.Router) error {
 	//        - `network`=(`<network id>` or `<network name>`)
 	//        - `publish`=(`<port>[/<proto>]` or `<startport-endport>/[<proto>]`)
 	//        - `since`=(`<container id>` or `<container name>`)
-	//        - `status`=(`created`, `restarting`, `running`, `removing`, `paused`, `exited` or `dead`)
+	//        - `status`=(`created`, `restarting`, `running`, `removing`, `paused`, `exited` or `dead`). Note: `restarting` and `dead` have no equivalent in Podman and match no containers.
 	//        - `volume`=(`<volume name>` or `<mount point destination>`)
 	// produces:
 	// - application/json
@@ -391,7 +391,13 @@ func (s *APIServer) registerContainersHandlers(r *mux.Router) error {
 	// tags:
 	//   - containers (compat)
 	// summary: Get stats for a container
-	// description: This returns a live stream of a container’s resource usage statistics.
+	// description: |
+	//   This returns a live stream of a container's resource usage statistics.
+	//   With stream=false, precpu_stats is seeded from an initial sample taken
+	//   ~100 ms before cpu_stats. The resulting CPU percentage is a coarse
+	//   snapshot, not a sustained average. With one-shot=true, a single
+	//   sample is returned: precpu_stats is blank and cpu_stats.cpu is 0.
+	//   For a smooth CPU percentage, use stream=true.
 	// parameters:
 	//  - in: path
 	//    name: name
@@ -407,7 +413,7 @@ func (s *APIServer) registerContainersHandlers(r *mux.Router) error {
 	//    name: one-shot
 	//    type: boolean
 	//    default: false
-	//    description: Provide a one-shot response in which preCPU stats are blank, resulting in a single cycle return.
+	//    description: Return a single sample. precpu_stats is blank and cpu_stats.cpu is 0. Cannot be combined with stream=true.
 	// produces:
 	// - application/json
 	// responses:
@@ -832,7 +838,7 @@ func (s *APIServer) registerContainersHandlers(r *mux.Router) error {
 	//        - `pod`=(`<pod id>` or `<pod name>`)
 	//        - `publish`=(`<port>[/<proto>]` or `<startport-endport>/[<proto>]`)
 	//        - `since`=(`<container id>` or `<container name>`)
-	//        - `status`=(`created`, `restarting`, `running`, `removing`, `paused`, `exited` or `dead`)
+	//        - `status`=(`created`, `initialized`, `running`, `stopping`, `stopped`, `exited`, `paused`, `removing` or `unknown`)
 	//        - `volume`=(`<volume name>` or `<mount point destination>`)
 	// produces:
 	// - application/json

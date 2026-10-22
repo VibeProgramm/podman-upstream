@@ -39,6 +39,7 @@ import (
 	"go.podman.io/podman/v6/pkg/k8s.io/apimachinery/pkg/util/intstr"
 	"go.podman.io/podman/v6/pkg/specgen"
 	"go.podman.io/podman/v6/pkg/specgen/generate"
+	"go.podman.io/podman/v6/pkg/specgenutil"
 	systemdDefine "go.podman.io/podman/v6/pkg/systemd/define"
 	"go.podman.io/podman/v6/pkg/util"
 	"go.podman.io/storage/pkg/system"
@@ -410,11 +411,12 @@ func ToSpecGen(ctx context.Context, opts *CtrSpecGenOptions) (*specgen.SpecGener
 		if err != nil {
 			return nil, err
 		}
+		limit := specgenutil.PidsLimitForOCI(pidslimitAsInt)
 		if s.ResourceLimits == nil {
 			s.ResourceLimits = &spec.LinuxResources{}
 		}
 		s.ResourceLimits.Pids = &spec.LinuxPids{
-			Limit: &pidslimitAsInt,
+			Limit: &limit,
 		}
 	}
 

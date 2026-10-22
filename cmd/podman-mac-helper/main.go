@@ -3,6 +3,7 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -102,8 +103,8 @@ func getUser() (string, string, string, error) {
 }
 
 // Used for commands that don't return a proper exit code
-func runDetectErr(name string, args ...string) error {
-	cmd := exec.Command(name, args...)
+func runDetectErr(ctx context.Context, name string, args ...string) error {
+	cmd := exec.CommandContext(ctx, name, args...)
 	errReader, err := cmd.StderrPipe()
 	if err != nil {
 		return err

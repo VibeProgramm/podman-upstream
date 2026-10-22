@@ -141,6 +141,28 @@ var _ = Describe("Podman container inspect", func() {
 		Expect(data[0].Config.Env).To(ContainElement(Equal(secretName + "=*******")))
 	})
 
+	It("podman inspect identifies init container", func() {
+		podName := "test-init-pod"
+		initCtrName := "test-init-ctr"
+		normalCtrName := "test-normal-ctr"
+
+		podmanTest.PodmanExitCleanly("pod", "create", "--name", podName)
+
+		podmanTest.PodmanExitCleanly("create", "--pod", podName, "--init-ctr=always", "--name", initCtrName, ALPINE, "echo", "init")
+
+		podmanTest.PodmanExitCleanly("create", "--pod", podName, "--name", normalCtrName, ALPINE, "top")
+
+		initData := podmanTest.InspectContainer(initCtrName)
+		Expect(initData).To(HaveLen(1))
+		Expect(initData[0].IsInitCtr).To(BeTrue())
+		Expect(initData[0].InitContainerType).To(Equal("always"))
+
+		normalData := podmanTest.InspectContainer(normalCtrName)
+		Expect(normalData).To(HaveLen(1))
+		Expect(normalData[0].IsInitCtr).To(BeFalse())
+		Expect(normalData[0].InitContainerType).To(BeEmpty())
+	})
+
 	It("podman inspect NetworkSettings DNSNames and Aliases", func() {
 		netName := "dnstest"
 		session := podmanTest.Podman([]string{"network", "create", netName})

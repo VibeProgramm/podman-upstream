@@ -93,14 +93,14 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version-file: go.mod
+          go-version: '1.26'
           cache: false
 
       - name: Read golangci-lint version from Makefile
         id: gv
         run: |
           v=$(awk -F':=' '/^GOLANGCI_LINT_VERSION/ {gsub(/ /,"",$2); print $2; exit}' Makefile)
-          echo "version=v${v}" >> $GITHUB_OUTPUT
+          echo "version=v${v}" >> "$GITHUB_OUTPUT"
 
       - uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
         with:
@@ -198,7 +198,7 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version-file: go.mod
+          go-version: '1.26'
           cache: false
       - name: Run cross build
         run: make cross
@@ -210,7 +210,7 @@ jobs:
       fail-fast: false
       matrix:
         distro: [fedora-current, fedora-prior, fedora-rawhide, debian-sid]
-    uses: ./.github/workflows/lima.yml
+    uses: $/.github/workflows/lima.yml
     with:
       runner: cncf-ubuntu-8-32-x86
       test: build
@@ -245,7 +245,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e  # v7.0.0
         with:
-          go-version-file: go.mod
+          go-version: '1.26'
           cache: true
 
       - name: Install build dependencies
@@ -285,7 +285,7 @@ jobs:
 
       - name: Upload artifacts
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
         with:
           name: windows-installer-${{ matrix.provider }}-diag
           path: |
@@ -305,7 +305,7 @@ jobs:
 
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e  # v7.0.0
         with:
-          go-version-file: go.mod
+          go-version: '1.26'
           cache: true
 
       - name: Build core binaries
@@ -314,7 +314,7 @@ jobs:
           make podman-mac-helper
 
       - name: Upload test binaries
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
         with:
           name: podman-macos-bin
           # Single path keeps the `bin/` prefix; a path list would trigger LCA
@@ -333,7 +333,7 @@ jobs:
 
       - name: Upload release artifacts
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
         with:
           name: podman-darwin-arm64
           path: |
@@ -372,14 +372,14 @@ jobs:
             distro: fedora-current
             priv: root
             mode: remote
-    uses: ./.github/workflows/lima.yml
+    uses: $/.github/workflows/lima.yml
     with:
       runner: cncf-ubuntu-8-32-x86
       test: ${{ matrix.test }}
       distro: ${{ matrix.distro }}
       mode: ${{ matrix.mode }}
       priv: ${{ matrix.priv }}
-      timeout: ${{ matrix.timeout || 30 }}
+      timeout: 30
       # Top level if does not work because it does not have access to the matrix context.
       # However we can hack around by passing this input argument and the workflow_call
       # can then use this in the if condition to make it work that way.
@@ -420,7 +420,7 @@ jobs:
             distro: fedora-current
             priv: rootless
 
-    uses: ./.github/workflows/lima.yml
+    uses: $/.github/workflows/lima.yml
     with:
       runner: cncf-ubuntu-4-16-x86
       test: ${{ matrix.test }}
@@ -457,14 +457,14 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version-file: go.mod
+          go-version: '1.26'
           cache: false
       - name: "Install gvproxy"
         run: |
           VERSION=$(go list -m -f '{{.Version}}' github.com/containers/gvisor-tap-vsock)
           echo "Installing gvproxy $VERSION"
           sudo mkdir -p /usr/local/libexec/podman/
-          sudo curl --fail -L -o /usr/local/libexec/podman/gvproxy https://github.com/containers/gvisor-tap-vsock/releases/download/$VERSION/gvproxy-linux-${{ matrix.os.arch }}
+          sudo curl --fail -L -o /usr/local/libexec/podman/gvproxy "https://github.com/containers/gvisor-tap-vsock/releases/download/$VERSION/gvproxy-linux-${{ matrix.os.arch }}"
           sudo chmod +x /usr/local/libexec/podman/gvproxy
 
       - name: "Install dependencies"
@@ -519,7 +519,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e  # v7.0.0
         with:
-          go-version-file: go.mod
+          go-version: '1.26'
           cache: true
 
       - name: Run unit tests
@@ -552,7 +552,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e  # v7.0.0
         with:
-          go-version-file: go.mod
+          go-version: '1.26'
           cache: true
 
       - name: Build podman
@@ -598,7 +598,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e  # v7.0.0
         with:
-          go-version-file: go.mod
+          go-version: '1.26'
           cache: true
 
       - name: Diagnostics
@@ -690,14 +690,14 @@ jobs:
 
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e  # v7.0.0
         with:
-          go-version-file: go.mod
+          go-version: '1.26'
           cache: true
 
       - name: Pre-clean machine state
         run: ./hack/ci/gha_mac_cleanup.sh
 
       - name: Download test binaries
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333  # v8.0.2
         with:
           name: podman-macos-bin
           # `path: bin` on upload sent the *contents* of bin/ (no prefix).

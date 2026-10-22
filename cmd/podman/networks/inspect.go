@@ -35,7 +35,7 @@ func init() {
 	_ = networkinspectCommand.RegisterFlagCompletionFunc(formatFlagName, common.AutocompleteFormat(&entities.NetworkInspectReport{}))
 }
 
-func networkInspect(_ *cobra.Command, args []string) error {
+func networkInspect(cmd *cobra.Command, args []string) error {
 	inspectOpts.Type = common.NetworkType
-	return inspect.Inspect(args, *inspectOpts)
+	return inspect.Inspect(cmd.Context(), args, *inspectOpts)
 }

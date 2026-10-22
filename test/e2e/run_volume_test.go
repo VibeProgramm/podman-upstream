@@ -373,7 +373,7 @@ var _ = Describe("Podman run with volumes", func() {
 	})
 
 	It("podman run with noexec can't exec", func() {
-		session := podmanTest.Podman([]string{"run", "--rm", "-v", "/bin:/hostbin:noexec", ALPINE, "/hostbin/ls", "/"})
+		session := podmanTest.Podman([]string{"run", "--rm", "-v", "/bin:/hostbin:noexec", ALPINE, "/hostbin/true"})
 		session.WaitWithDefaultTimeout()
 		Expect(session).To(ExitWithError(126, "ermission denied"))
 	})

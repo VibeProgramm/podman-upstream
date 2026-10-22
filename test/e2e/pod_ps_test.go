@@ -352,19 +352,32 @@ var _ = Describe("Podman ps", func() {
 	})
 
 	It("podman pod ps format with labels", func() {
-		_, ec, _ := podmanTest.CreatePod(nil)
+		_, ec, _ := podmanTest.CreatePod(map[string][]string{"--name": {"without-label"}})
 		Expect(ec).To(Equal(0))
 
-		_, ec1, _ := podmanTest.CreatePod(map[string][]string{"--label": {
-			"io.podman.test.label=value1",
-			"io.podman.test.key=irrelevant-value",
-		}})
+		_, ec1, _ := podmanTest.CreatePod(map[string][]string{
+			"--name": {"with-label"},
+			"--label": {
+				"io.podman.test.label=value1",
+				"io.podman.test.key=irrelevant-value",
+			},
+		})
 		Expect(ec1).To(Equal(0))
 
 		session := podmanTest.Podman([]string{"pod", "ps", "--format", "{{.Labels}}"})
 		session.WaitWithDefaultTimeout()
 		Expect(session).Should(ExitCleanly())
 		Expect(session.OutputToString()).To(ContainSubstring("value1"))
+
+		format := `table {{.Name}}|{{.Label "io.podman.test.label"}}|{{.Label "missing"}}`
+		session = podmanTest.PodmanExitCleanly("pod", "ps", "--format", format)
+		actual := session.OutputToStringArray()
+		Expect(actual).To(HaveLen(3))
+		Expect(actual[0]).To(Equal("NAME|io.podman.test.label|missing"))
+		Expect(actual[1:]).To(ConsistOf("with-label|value1|", "without-label||"))
+
+		session = podmanTest.PodmanExitCleanly("pod", "ps", "--noheading", "--format", format)
+		Expect(session.OutputToStringArray()).To(ConsistOf("with-label|value1|", "without-label||"))
 	})
 
 	It("podman pod ps headers", func() {

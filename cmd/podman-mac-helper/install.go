@@ -83,7 +83,7 @@ func init() {
 	rootCmd.AddCommand(installCmd)
 }
 
-func install(_ *cobra.Command, _ []string) error {
+func install(cmd *cobra.Command, _ []string) error {
 	userName, uid, homeDir, err := getUser()
 	if err != nil {
 		return err
@@ -120,7 +120,7 @@ func install(_ *cobra.Command, _ []string) error {
 		return err
 	}
 
-	if err = runDetectErr("launchctl", "load", fileName); err != nil {
+	if err = runDetectErr(cmd.Context(), "launchctl", "load", fileName); err != nil {
 		return fmt.Errorf("launchctl failed loading service: %w", err)
 	}
 

@@ -93,7 +93,7 @@ func (e EventJournalD) Write(ee Event) error {
 		prio = journal.PriNotice
 	}
 
-	return journal.Send(ee.ToHumanReadable(false), prio, m)
+	return journal.Send(ee.ToHumanReadableWithoutTime(false), prio, m)
 }
 
 func addLabelsToJournal(journalEntry, eventAttributes map[string]string) error {

@@ -539,7 +539,6 @@ type InspectContainerHostConfig struct {
 	// ConsoleSize is an array of 2 integers showing the size of the
 	// container's console.
 	// It is only set if the container is creating a terminal.
-	// TODO.
 	ConsoleSize []uint `json:"ConsoleSize"`
 	// Isolation is presently unused and provided solely for Docker
 	// compatibility.
@@ -808,6 +807,8 @@ type InspectContainerData struct {
 	Namespace               string                      `json:"Namespace"`
 	IsInfra                 bool                        `json:"IsInfra"`
 	IsService               bool                        `json:"IsService"`
+	IsInitCtr               bool                        `json:"IsInitCtr"`
+	InitContainerType       string                      `json:"InitContainerType,omitempty"`
 	KubeExitCodePropagation string                      `json:"KubeExitCodePropagation"`
 	LockNumber              uint32                      `json:"lockNumber"`
 	Config                  *InspectContainerConfig     `json:"Config"`

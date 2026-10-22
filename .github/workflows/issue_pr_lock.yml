@@ -57,11 +57,13 @@ jobs:
       # Ref: https://docs.github.com/en/apps/creating-github-apps/authenticating-with-a-github-app/making-authenticated-api-requests-with-a-github-app-in-a-github-actions-workflow
       - name: Obtain Stale Locking App token
         id: generate-token
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
           # N/B: These are both defined at the podman-container-tools org level
           client-id: ${{ vars.STALE_LOCKING_CLIENT_ID }}
           private-key: ${{ secrets.STALE_LOCKING_APP_PRIVATE_KEY }}
+          permission-pull-requests: write
+          permission-issues: write
 
       # Ref: https://github.com/dessant/lock-threads#usage
       - uses: dessant/lock-threads@89ae32b08ed1a541efecbab17912962a5e38981c # v6.0.2
@@ -76,7 +78,7 @@ jobs:
           log-output: true
       - if: failure()
         name: Send job failure notification e-mail
-        uses: dawidd6/action-send-mail@ca8dbb4d4f91ca7f75e7f2feea5339e76ce70c90 # v20
+        uses: dawidd6/action-send-mail@47af4a10b540781705f283a2cf1a9650713ac795 # v23
         with:
           server_address: ${{secrets.ACTION_MAIL_SERVER}}
           server_port: 465

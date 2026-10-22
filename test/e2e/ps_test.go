@@ -5,6 +5,8 @@ package integration
 import (
 	"cmp"
 	"fmt"
+	"os"
+	"path/filepath"
 	"regexp"
 	"slices"
 	"strconv"
@@ -298,10 +300,11 @@ var _ = Describe("Podman ps", func() {
 	})
 
 	It("podman ps namespace flag with go template format", func() {
-		_, ec, _ := podmanTest.RunLsContainer("test1")
-		Expect(ec).To(Equal(0))
+		result := podmanTest.Podman([]string{"run", "--name", "test1", "--network=none", "--label", "app=my-app", ALPINE, "ls"})
+		result.WaitWithDefaultTimeout()
+		Expect(result).Should(Exit(0))
 
-		result := podmanTest.Podman([]string{"ps", "-a", "--format", "table {{.ID}} {{.Image}} {{.ImageID}} {{.Labels}}"})
+		result = podmanTest.Podman([]string{"ps", "-a", "--format", "table {{.ID}} {{.Image}} {{.ImageID}} {{.Labels}}"})
 		result.WaitWithDefaultTimeout()
 		Expect(result).Should(ExitCleanly())
 
@@ -311,6 +314,17 @@ var _ = Describe("Podman ps", func() {
 		Expect(actual[0]).To(ContainSubstring("CONTAINER ID"))
 		Expect(actual[0]).ToNot(ContainSubstring("ImageID"))
 		Expect(actual[1]).To(ContainSubstring("alpine:latest"))
+
+		podmanTest.PodmanExitCleanly("create", "--name", "test2", ALPINE, "ls")
+		format := `table {{.Names}}|{{.Label "app"}}|{{.Label "missing"}}`
+		result = podmanTest.PodmanExitCleanly("ps", "-a", "--format", format)
+		actual = result.OutputToStringArray()
+		Expect(actual).To(HaveLen(3))
+		Expect(actual[0]).To(Equal("NAMES|app|missing"))
+		Expect(actual[1:]).To(ConsistOf("test1|my-app|", "test2||"))
+
+		result = podmanTest.PodmanExitCleanly("ps", "-a", "--noheading", "--format", format)
+		Expect(result.OutputToStringArray()).To(ConsistOf("test1|my-app|", "test2||"))
 	})
 
 	It("podman ps ancestor filter flag", func() {
@@ -416,6 +430,42 @@ var _ = Describe("Podman ps", func() {
 		Expect(psAll.OutputToString()).To(Equal(psFilter.OutputToString()))
 	})
 
+	It("podman ps negated status filter does not need all", func() {
+		stoppedCtr := podmanTest.PodmanExitCleanly("create", "--name", "ps-negated-status-stopped", ALPINE, "ls", "/")
+
+		runningCtr := podmanTest.PodmanExitCleanly("run", "-d", "--name", "ps-negated-status-running", ALPINE, "sleep", "600")
+
+		psFilter := podmanTest.PodmanExitCleanly("ps", "--no-trunc", "--quiet", "--filter", "status!=running")
+
+		Expect(psFilter.OutputToStringArray()).To(HaveLen(1))
+		Expect(psFilter.OutputToString()).To(Equal(stoppedCtr.OutputToString()))
+		Expect(psFilter.OutputToString()).ToNot(ContainSubstring(runningCtr.OutputToString()))
+
+		psFilter = podmanTest.PodmanExitCleanly("ps", "--no-trunc", "--quiet", "--filter", "status!=stopped")
+		Expect(psFilter.OutputToStringArray()).To(ConsistOf(stoppedCtr.OutputToString(), runningCtr.OutputToString()))
+	})
+
+	It("podman ps multiple negated status filters", func() {
+		podmanTest.PodmanExitCleanly("create", "--name", "ps-negated-status-created", ALPINE, "ls", "/")
+
+		runningCtr := podmanTest.PodmanExitCleanly("run", "-d", "--name", "ps-negated-status-running", ALPINE, "sleep", "600")
+
+		// Excluding only "created" leaves the running container.
+		psFilter := podmanTest.PodmanExitCleanly("ps", "--no-trunc", "--quiet", "--filter", "status!=created")
+		Expect(psFilter.OutputToStringArray()).To(HaveLen(1))
+		Expect(psFilter.OutputToString()).To(Equal(runningCtr.OutputToString()))
+
+		// Excluding both states leaves nothing.
+		psFilter = podmanTest.PodmanExitCleanly("ps", "--no-trunc", "--quiet", "--filter", "status!=created", "--filter", "status!=running")
+		Expect(psFilter.OutputToString()).To(BeEmpty())
+	})
+
+	It("podman ps negated status filter with invalid value", func() {
+		session := podmanTest.Podman([]string{"ps", "--filter", "status!=bogus"})
+		session.WaitWithDefaultTimeout()
+		Expect(session).Should(ExitWithError(125, "bogus"))
+	})
+
 	It("podman filter without status does not find non-running", func() {
 		ctrName := "aContainerName"
 		ctr := podmanTest.Podman([]string{"create", "--name", ctrName, ALPINE, "ls", "/"})
@@ -518,6 +568,19 @@ var _ = Describe("Podman ps", func() {
 			size2, _ := units.FromHumanSize(matches2[1])
 			return cmp.Compare(size1, size2)
 		})).To(BeTrue(), "slice is sorted")
+	})
+
+	It("podman --sort by pod", func() {
+		// Create the pods in reverse-alphabetical order so a broken sort
+		// (falling back to creation order) would fail this test.
+		for _, name := range []string{"bpod", "apod"} {
+			podmanTest.PodmanExitCleanly("pod", "create", "--name", name)
+			podmanTest.PodmanExitCleanly("create", "--pod", name, ALPINE, "top")
+		}
+
+		session := podmanTest.PodmanExitCleanly("ps", "-a", "--pod", "--sort=pod", "--format", "{{.PodName}}")
+
+		Expect(slices.IsSorted(session.OutputToStringArray())).To(BeTrue(), "containers are sorted by pod name")
 	})
 
 	It("podman --sort by command", func() {
@@ -973,6 +1036,22 @@ var _ = Describe("Podman ps", func() {
 
 		output := session.OutputToStringArray()
 		Expect(output).To(HaveLen(1))
+	})
+
+	It("podman container list filter external by negated status", func() {
+		containerFilePath := filepath.Join(podmanTest.TempDir, "Containerfile-ps-external-status")
+		err := os.WriteFile(containerFilePath, []byte(fmt.Sprintf("FROM %s\nRUN echo hello > /hello\nRUN false\n", ALPINE)), 0o755)
+		Expect(err).ToNot(HaveOccurred())
+
+		build := podmanTest.Podman([]string{"build", "--network=none", "--force-rm=false", "--rm=false", "-f", containerFilePath, "-t", "ps-external-status"})
+		build.WaitWithDefaultTimeout()
+		Expect(build).To(Exit(1))
+
+		external := podmanTest.PodmanExitCleanly("container", "list", "--external=1", "--filter=status!=running", "--no-trunc=1", "--quiet=1")
+		Expect(external.OutputToStringArray()).ToNot(BeEmpty())
+
+		running := podmanTest.PodmanExitCleanly("container", "list", "--external", "--noheading", "--quiet", "--filter", "status=running")
+		Expect(running.OutputToStringArray()).To(BeEmpty())
 	})
 
 	// This test checks ps filtering of external container by container name

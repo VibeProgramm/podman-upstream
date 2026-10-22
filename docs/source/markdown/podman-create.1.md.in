@@ -106,10 +106,6 @@ and specified with a _tag_.
 
 @@option cpu-quota
 
-@@option cpu-rt-period
-
-@@option cpu-rt-runtime
-
 @@option cpu-shares
 
 @@option cpus.container
@@ -185,6 +181,8 @@ See [**Environment**](#environment) note below for precedence and examples.
 @@option health-on-failure
 
 @@option health-retries
+
+@@option health-start-interval
 
 @@option health-start-period
 
@@ -422,7 +420,7 @@ $ podman create --annotation HELLO=WORLD alpine ls
 
 Create a container using a local image, allocating a pseudo-TTY, keeping stdin open and name it myctr:
 ```
-  podman create -t -i --name myctr alpine ls
+  $ podman create -t -i --name myctr alpine ls
 ```
 
 Running a container in a new user namespace requires a mapping of

@@ -39,6 +39,13 @@ type imageInspect struct {
 	Body handlers.ImageInspect
 }
 
+// Distribution Inspect
+// swagger:response
+type distributionInspectResponse struct {
+	// in:body
+	Body registry.DistributionInspect
+}
+
 // Image Load
 // swagger:response
 type imagesLoadResponseLibpod struct {
@@ -531,4 +538,11 @@ type quadletFileResponse struct {
 type quadletRemoveResponse struct {
 	// in:body
 	Body entities.QuadletRemoveReport
+}
+
+// Auto Update
+// swagger:response
+type autoupdateResponse struct {
+	// in:body
+	Body handlers.LibpodAutoUpdateReports
 }

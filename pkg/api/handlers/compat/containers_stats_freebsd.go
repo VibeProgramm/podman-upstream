@@ -10,7 +10,7 @@ import (
 	"go.podman.io/podman/v6/libpod/define"
 )
 
-func getPreCPUStats(stats *define.ContainerStats) CPUStats {
+func getPreCPUStats(stats *define.ContainerStats) (CPUStats, error) {
 	return CPUStats{
 		CPUUsage: container.CPUUsage{
 			TotalUsage: stats.CPUNano,
@@ -18,7 +18,7 @@ func getPreCPUStats(stats *define.ContainerStats) CPUStats {
 		CPU:            stats.CPU,
 		OnlineCPUs:     0,
 		ThrottlingData: container.ThrottlingData{},
-	}
+	}, nil
 }
 
 func statsContainerJSON(_ *libpod.Container, stats *define.ContainerStats, preCPUStats CPUStats, onlineCPUs int) (StatsJSON, error) {

@@ -2,6 +2,7 @@ package containers
 
 import (
 	"cmp"
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -101,7 +102,7 @@ func listFlagSet(cmd *cobra.Command) {
 	flags.UintVarP(&listOpts.Watch, watchFlagName, "w", 0, "Watch the ps output on an interval in seconds")
 	_ = cmd.RegisterFlagCompletionFunc(watchFlagName, completion.AutocompleteNone)
 
-	sort := validate.Value(&listOpts.Sort, "command", "created", "id", "image", "names", "runningfor", "size", "status")
+	sort := validate.Value(&listOpts.Sort, "command", "created", "id", "image", "names", "pod", "runningfor", "size", "status")
 	sortFlagName := "sort"
 	flags.Var(sort, sortFlagName, "Sort output by: "+sort.Choices())
 	_ = cmd.RegisterFlagCompletionFunc(sortFlagName, common.AutocompletePsSort)
@@ -173,8 +174,8 @@ func quietOut(responses []entities.ListContainer) {
 	}
 }
 
-func getResponses() ([]entities.ListContainer, error) {
-	responses, err := registry.ContainerEngine().ContainerList(registry.Context(), listOpts)
+func getResponses(ctx context.Context) ([]entities.ListContainer, error) {
+	responses, err := registry.ContainerEngine().ContainerList(ctx, listOpts)
 	if err != nil {
 		return nil, err
 	}
@@ -203,7 +204,7 @@ func ps(cmd *cobra.Command, _ []string) error {
 		}
 		listOpts.Filters[fname] = append(listOpts.Filters[fname], filter)
 	}
-	listContainers, err := getResponses()
+	listContainers, err := getResponses(cmd.Context())
 	if err != nil {
 		return err
 	}
@@ -260,7 +261,7 @@ func ps(cmd *cobra.Command, _ []string) error {
 		// responses will grow to the largest number of processes reported on, but will not thrash the gc
 		var responses []psReporter
 		for ; ; responses = responses[:0] {
-			ctnrs, err := getResponses()
+			ctnrs, err := getResponses(cmd.Context())
 			if err != nil {
 				return err
 			}
@@ -295,7 +296,7 @@ func ps(cmd *cobra.Command, _ []string) error {
 }
 
 // cannot use report.Headers() as it doesn't support structures as fields
-func createPsOut() ([]map[string]string, string) {
+func createPsOut() ([]common.PsHeader, string) {
 	hdrs := report.Headers(psReporter{}, map[string]string{
 		"Cgroup":       "cgroupns",
 		"CreatedHuman": "created",
@@ -327,7 +328,7 @@ func createPsOut() ([]map[string]string, string) {
 			row += "\t{{.Size}}"
 		}
 	}
-	return hdrs, "{{range .}}" + row + "\n{{end -}}"
+	return []common.PsHeader{common.PsHeader(hdrs[0])}, "{{range .}}" + row + "\n{{end -}}"
 }
 
 type psReporter struct {

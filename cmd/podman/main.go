@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -72,7 +73,7 @@ func main() {
 
 	rootCmd = parseCommands()
 
-	Execute()
+	Execute(context.Background())
 	os.Exit(0)
 }
 

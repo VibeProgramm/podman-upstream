@@ -10,6 +10,8 @@ import (
 type PlayOptions struct {
 	// Annotations - Annotations to add to Pods
 	Annotations map[string]string
+	// Labels - labels to add to created resources
+	Labels map[string]string
 	// Authfile - path to an authentication file.
 	Authfile *string `schema:"-"`
 	// CertDir - to a directory containing TLS certifications and keys.
@@ -67,6 +69,8 @@ type PlayOptions struct {
 	Wait             *bool
 	ServiceContainer *bool
 	NoPodPrefix      *bool
+	// MultiplePods allows creating of multiple Pods
+	MultiplePods *bool
 }
 
 // ApplyOptions are optional options for applying kube YAML files to a k8s cluster

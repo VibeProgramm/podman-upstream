@@ -48,6 +48,7 @@ import (
 	"go.podman.io/podman/v6/pkg/systemd/notifyproxy"
 	"go.podman.io/podman/v6/pkg/util"
 	"go.podman.io/storage"
+	"go.podman.io/storage/pkg/archive"
 	"go.podman.io/storage/pkg/chrootarchive"
 	"go.podman.io/storage/pkg/directory"
 	"go.podman.io/storage/pkg/fileutils"
@@ -328,7 +329,7 @@ func (c *Container) handleRestartPolicy(ctx context.Context) (_ bool, retErr err
 		return false, err
 	}
 
-	if err := c.prepare(); err != nil {
+	if err := c.prepare(ctx); err != nil {
 		return false, err
 	}
 
@@ -791,7 +792,10 @@ func (c *Container) export(out io.Writer) error {
 		}()
 	}
 
-	input, err := chrootarchive.Tar(mountPoint, nil, mountPoint)
+	input, err := chrootarchive.Tar(mountPoint, &archive.TarOptions{
+		UIDMaps: c.config.IDMappings.UIDMap,
+		GIDMaps: c.config.IDMappings.GIDMap,
+	}, mountPoint)
 	if err != nil {
 		return fmt.Errorf("reading container directory %q: %w", c.ID(), err)
 	}
@@ -845,7 +849,7 @@ func (c *Container) prepareToStart(ctx context.Context, recursive bool) (retErr 
 		}
 	}()
 
-	if err := c.prepare(); err != nil {
+	if err := c.prepare(ctx); err != nil {
 		return err
 	}
 
@@ -1227,7 +1231,7 @@ func (c *Container) initAndStart(ctx context.Context) (retErr error) {
 		}
 	}()
 
-	if err := c.prepare(); err != nil {
+	if err := c.prepare(ctx); err != nil {
 		return err
 	}
 
@@ -1343,6 +1347,57 @@ func (c *Container) waitForHealthy(ctx context.Context) error {
 	if !c.batched {
 		c.lock.Unlock()
 		defer c.lock.Lock()
+	}
+	if c.config.SdNotifySocket != "" {
+		// While waiting for the container to turn healthy, keep
+		// extending the start timeout of the systemd unit so that a
+		// time-to-healthy larger than systemd's TimeoutStartSec is
+		// respected, whether it is dominated by a large
+		// HealthStartPeriod or by a long-running startup healthcheck.
+		// The health status remains "starting" during that entire
+		// window, so extensions stop as soon as the container turns
+		// healthy (the wait below returns), unhealthy or stopped,
+		// letting systemd's own timeout kick back in.
+		// Re-send well before the previous extension expires so that
+		// scheduling delays on slow systems cannot let the timeout
+		// lapse between two extensions.
+		const (
+			extendInterval = 10 * time.Second
+			extendAmount   = 30 * time.Second
+		)
+
+		extendCtx, cancel := context.WithCancel(ctx)
+		defer cancel()
+
+		ticker := time.NewTicker(extendInterval)
+		defer ticker.Stop()
+
+		msg := fmt.Sprintf("EXTEND_TIMEOUT_USEC=%d", extendAmount.Microseconds())
+
+		// Send the first extension immediately.
+		// systemd.service(5): "The first receipt of this message must occur before TimeoutStartSec= is exceeded."
+		if err := notifyproxy.SendMessage(c.config.SdNotifySocket, msg); err != nil {
+			logrus.Errorf("Sending EXTEND_TIMEOUT_USEC failed: %v", err)
+		}
+		go func() {
+			for {
+				select {
+				case <-extendCtx.Done():
+					return
+				case <-ticker.C:
+					// Send before checking the status: reading the status takes
+					// the container lock, and a delay there must not push the
+					// extension past the previous extension's expiry.
+					if err := notifyproxy.SendMessage(c.config.SdNotifySocket, msg); err != nil {
+						logrus.Errorf("Sending EXTEND_TIMEOUT_USEC failed: %v", err)
+					}
+					status, err := c.HealthCheckStatus()
+					if err != nil || status != define.HealthCheckStarting {
+						return
+					}
+				}
+			}
+		}()
 	}
 
 	if _, err := c.WaitForConditionWithInterval(ctx, DefaultWaitInterval, define.HealthCheckHealthy); err != nil {
@@ -1664,7 +1719,7 @@ func (c *Container) restartWithTimeout(ctx context.Context, timeout uint) (retEr
 			}
 		}
 	}()
-	if err := c.prepare(); err != nil {
+	if err := c.prepare(ctx); err != nil {
 		return err
 	}
 
@@ -1691,7 +1746,7 @@ func (c *Container) restartWithTimeout(ctx context.Context, timeout uint) (retEr
 // TODO: Add ability to override mount label so we can use this for Mount() too
 // TODO: Can we use this for export? Copying SHM into the export might not be
 // good
-func (c *Container) mountStorage() (_ string, deferredErr error) {
+func (c *Container) mountStorage(ctx context.Context) (_ string, deferredErr error) {
 	var err error
 	// Container already mounted, nothing to do
 	if c.state.Mounted {
@@ -1870,7 +1925,7 @@ func (c *Container) mountStorage() (_ string, deferredErr error) {
 
 	// Request a mount of all named volumes
 	for _, v := range c.config.NamedVolumes {
-		vol, err := c.mountNamedVolume(v, mountPoint)
+		vol, err := c.mountNamedVolume(ctx, v, mountPoint)
 		if err != nil {
 			return "", err
 		}
@@ -1894,7 +1949,7 @@ func (c *Container) mountStorage() (_ string, deferredErr error) {
 // Does not verify that the name volume given is actually present in container
 // config.
 // Returns the volume that was mounted.
-func (c *Container) mountNamedVolume(v *ContainerNamedVolume, mountpoint string) (*Volume, error) {
+func (c *Container) mountNamedVolume(ctx context.Context, v *ContainerNamedVolume, mountpoint string) (*Volume, error) {
 	logrus.Debugf("Going to mount named volume %s", v.Name)
 	vol, err := c.runtime.state.Volume(v.Name)
 	if err != nil {
@@ -1997,7 +2052,7 @@ func (c *Container) mountNamedVolume(v *ContainerNamedVolume, mountpoint string)
 		// Copy, volume side: stream what we've written to the pipe, into
 		// the volume.
 		copyOpts := copier.PutOptions{}
-		if err := copier.Put(volMount, "", copyOpts, reader); err != nil {
+		if err := copier.PutContext(ctx, volMount, "", copyOpts, reader); err != nil {
 			// consume the reader otherwise the goroutine will block
 			_, _ = io.Copy(io.Discard, reader)
 			err2 := <-errChan

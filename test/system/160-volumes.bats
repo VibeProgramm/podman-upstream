@@ -283,6 +283,29 @@ EOF
     run_podman volume rm $volname
 }
 
+@test "podman volume export mounted volume with multiple files" {
+    local myvoldir=${PODMAN_TMPDIR}/volume_$(random_string)
+    mkdir -p "$myvoldir"
+    local num_files=25
+    for i in $(seq 1 $num_files); do
+        echo "test content $i" > "$myvoldir/file_$i.txt"
+    done
+
+    local volname="myvol_$(random_string 10)"
+    run_podman volume create -o type=bind -o device="$myvoldir" "$volname"
+    assert "$output" == "$volname" "volume create emits the name it was given"
+
+    local tarfile=${PODMAN_TMPDIR}/export_$(random_string).tar
+    run_podman volume export "$volname" --output="$tarfile"
+    assert "$output" = ""
+
+    run tar -tf "$tarfile"
+    assert "${#lines[@]}" -eq $num_files "all files were exported from volume"
+    rm -f "$tarfile"
+
+    run_podman volume rm "$volname"
+}
+
 # Podman volume user test
 @test "podman volume user test" {
     is_rootless || skip "only meaningful when run rootless"
@@ -553,6 +576,25 @@ NeedsChown    | true
         run_podman 125 volume mount ${myvolume}
         is "$output" "Error: cannot run command \"podman volume mount\" in rootless mode, must execute.*podman unshare.*first" "Should fail and complain about unshare"
     fi
+}
+
+@test "podman volume mount detects stale mount state" {
+    skip_if_remote "podman --remote volume mount not supported"
+    skip_if_rootless "mounting tmpfs volumes requires root"
+
+    myvolume=myvol$(random_string)
+    run_podman volume create -o type=tmpfs -o o=size=2M -o device=tmpfs $myvolume
+
+    run_podman volume mount $myvolume
+    mountpoint=$output
+    umount "$mountpoint"
+
+    run_podman 125 volume mount $myvolume
+    is "$output" "Error: volume $myvolume is expected to be mounted, but mountpoint $mountpoint is not mounted (mount count: 1)" \
+        "mounting a volume whose mountpoint disappeared should fail"
+
+    # clean up
+    run_podman volume rm --force $myvolume
 }
 
 @test "podman --image-volume" {

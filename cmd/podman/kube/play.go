@@ -2,6 +2,7 @@ package kube
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -43,6 +44,7 @@ type playKubeOptionsWrapper struct {
 	ValidateCLI    string
 	annotations    []string
 	macs           []string
+	labels         []string
 }
 
 const yamlFileSeparator = "\n---\n"
@@ -112,6 +114,10 @@ func playFlags(cmd *cobra.Command) {
 		"Add Podman-specific annotations to containers and pods created by Podman (key=value)",
 	)
 	_ = cmd.RegisterFlagCompletionFunc(annotationFlagName, completion.AutocompleteNone)
+
+	labelFlagName := "label"
+	flags.StringArrayVarP(&playOptions.labels, labelFlagName, "l", []string{}, "Add labels to resources created by podman kube play (key=value)")
+	_ = cmd.RegisterFlagCompletionFunc(labelFlagName, completion.AutocompleteNone)
 	credsFlagName := "creds"
 	flags.StringVar(&playOptions.CredentialsCLI, credsFlagName, "", "`Credentials` (USERNAME:PASSWORD) to use for authenticating to a registry")
 	_ = cmd.RegisterFlagCompletionFunc(credsFlagName, completion.AutocompleteNone)
@@ -189,6 +195,9 @@ func playFlags(cmd *cobra.Command) {
 
 	noPodPrefix := "no-pod-prefix"
 	flags.BoolVar(&playOptions.NoPodPrefix, noPodPrefix, false, "Do not prefix container name with pod name")
+
+	multiplePods := "multiple-pods"
+	flags.BoolVar(&playOptions.MultiplePods, multiplePods, false, "Allow creation of multiple pod replicas from a Deployment")
 
 	if !registry.IsRemote() {
 		certDirFlagName := "cert-dir"
@@ -276,6 +285,15 @@ func play(cmd *cobra.Command, args []string) error {
 		playOptions.Annotations[key] = val
 	}
 
+	// parse labels provided on CLI and attach to PlayKubeOptions
+	if len(playOptions.labels) > 0 {
+		labelMap, err := parse.GetAllLabels([]string{}, playOptions.labels)
+		if err != nil {
+			return err
+		}
+		playOptions.Labels = labelMap
+	}
+
 	if err := annotations.ValidateAnnotations(playOptions.Annotations); err != nil {
 		return err
 	}
@@ -298,11 +316,11 @@ func play(cmd *cobra.Command, args []string) error {
 	}
 
 	if playOptions.Down {
-		return teardown(reader, entities.PlayKubeDownOptions{Force: playOptions.Force})
+		return teardown(cmd.Context(), reader, entities.PlayKubeDownOptions{Force: playOptions.Force})
 	}
 
 	if playOptions.Replace {
-		if err := teardown(reader, entities.PlayKubeDownOptions{Force: playOptions.Force}); err != nil && !errorhandling.Contains(err, define.ErrNoSuchPod) {
+		if err := teardown(cmd.Context(), reader, entities.PlayKubeDownOptions{Force: playOptions.Force}); err != nil && !errorhandling.Contains(err, define.ErrNoSuchPod) {
 			return err
 		}
 		if _, err := reader.Seek(0, 0); err != nil {
@@ -336,13 +354,13 @@ func play(cmd *cobra.Command, args []string) error {
 			<-ch
 			// clean up any volumes that were created as well
 			fmt.Println("\nCleaning up containers, pods, and volumes...")
-			if err := teardown(teardownReader, entities.PlayKubeDownOptions{Force: true}); err != nil && !errorhandling.Contains(err, define.ErrNoSuchPod) {
+			if err := teardown(cmd.Context(), teardownReader, entities.PlayKubeDownOptions{Force: true}); err != nil && !errorhandling.Contains(err, define.ErrNoSuchPod) {
 				teardownErr = fmt.Errorf("error during cleanup: %w", err)
 			}
 		})
 	}
 
-	if playErr := kubeplay(reader); playErr != nil {
+	if playErr := kubeplay(cmd.Context(), reader); playErr != nil {
 		// FIXME: The cleanup logic below must be fixed to only remove
 		// resources that were created before a failure.  Otherwise,
 		// rerunning the same YAML file will cause an error and remove
@@ -430,14 +448,14 @@ func readerFromArg(fileOrURL string) (io.ReadCloser, error) {
 	}
 }
 
-func teardown(body io.Reader, options entities.PlayKubeDownOptions) error {
+func teardown(ctx context.Context, body io.Reader, options entities.PlayKubeDownOptions) error {
 	var (
 		podStopErrors utils.OutputErrors
 		podRmErrors   utils.OutputErrors
 		volRmErrors   utils.OutputErrors
 		secRmErrors   utils.OutputErrors
 	)
-	reports, err := registry.ContainerEngine().PlayKubeDown(registry.Context(), body, options)
+	reports, err := registry.ContainerEngine().PlayKubeDown(ctx, body, options)
 	if err != nil {
 		return err
 	}
@@ -503,8 +521,8 @@ func teardown(body io.Reader, options entities.PlayKubeDownOptions) error {
 	return volRmErrors.PrintErrors()
 }
 
-func kubeplay(body io.Reader) error {
-	report, err := registry.ContainerEngine().PlayKube(registry.Context(), body, playOptions.PlayKubeOptions)
+func kubeplay(ctx context.Context, body io.Reader) error {
+	report, err := registry.ContainerEngine().PlayKube(ctx, body, playOptions.PlayKubeOptions)
 	if err != nil {
 		return err
 	}
@@ -517,7 +535,7 @@ func kubeplay(body io.Reader) error {
 
 	// If --wait=true, we need wait for the service container to exit so that we know that the pod has exited and we can clean up
 	if playOptions.Wait {
-		_, err := registry.ContainerEngine().ContainerWait(registry.Context(), []string{report.ServiceContainerID}, entities.WaitOptions{})
+		_, err := registry.ContainerEngine().ContainerWait(ctx, []string{report.ServiceContainerID}, entities.WaitOptions{})
 		if err != nil {
 			return err
 		}

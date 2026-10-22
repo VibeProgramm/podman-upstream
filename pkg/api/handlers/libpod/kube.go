@@ -105,6 +105,7 @@ func KubePlay(w http.ResponseWriter, r *http.Request) {
 	decoder := r.Context().Value(api.DecoderKey).(*schema.Decoder)
 	query := struct {
 		Annotations      map[string]string `schema:"annotations"`
+		Labels           map[string]string `schema:"labels"`
 		LogDriver        string            `schema:"logDriver"`
 		LogOptions       []string          `schema:"logOptions"`
 		Network          []string          `schema:"network"`
@@ -124,6 +125,7 @@ func KubePlay(w http.ResponseWriter, r *http.Request) {
 		Wait             bool              `schema:"wait"`
 		Build            bool              `schema:"build"`
 		NoPodPrefix      bool              `schema:"noPodPrefix"`
+		MultiplePods     bool              `schema:"multiplePods"`
 	}{
 		TLSVerify: true,
 		Start:     true,
@@ -186,6 +188,7 @@ func KubePlay(w http.ResponseWriter, r *http.Request) {
 	containerEngine := abi.ContainerEngine{Libpod: runtime}
 	options := entities.PlayKubeOptions{
 		Annotations:        query.Annotations,
+		Labels:             query.Labels,
 		Authfile:           authfile,
 		IsRemote:           true,
 		LogDriver:          logDriver,
@@ -208,6 +211,7 @@ func KubePlay(w http.ResponseWriter, r *http.Request) {
 		Wait:               query.Wait,
 		ContextDir:         contextDirectory,
 		NoPodPrefix:        query.NoPodPrefix,
+		MultiplePods:       query.MultiplePods,
 	}
 	if _, found := r.URL.Query()["build"]; found {
 		options.Build = types.NewOptionalBool(query.Build)

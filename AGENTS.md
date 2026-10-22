@@ -112,7 +112,7 @@ It("should work correctly", func() {
 
 - **Formatter**: `gofumpt` (via `golangci-lint`, configured in `.golangci.yml`)
 - **Validation**: All PRs must pass `make validatepr`
-- **Commits**: Must be signed (`git commit -s`) and follow [DCO](CONTRIBUTING.md#sign-your-prs)
+- **Commits**: Must be signed (`git commit -s`) and follow [DCO](https://github.com/podman-container-tools/community/blob/main/CONTRIBUTING.md#DCO-Sign-off)
 - **Reviews**: Two approvals required for merge
 
 ## Key Libraries

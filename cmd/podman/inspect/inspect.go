@@ -39,12 +39,12 @@ func AddInspectFlagSet(cmd *cobra.Command) *entities.InspectOptions {
 }
 
 // Inspect inspects the specified container/image/pod/volume names or IDs.
-func Inspect(namesOrIDs []string, options entities.InspectOptions) error {
+func Inspect(ctx context.Context, namesOrIDs []string, options entities.InspectOptions) error {
 	inspector, err := newInspector(options)
 	if err != nil {
 		return err
 	}
-	return inspector.inspect(namesOrIDs)
+	return inspector.inspect(ctx, namesOrIDs)
 }
 
 // inspector allows for inspecting images and containers.
@@ -75,11 +75,10 @@ func newInspector(options entities.InspectOptions) (*inspector, error) {
 }
 
 // inspect inspects the specified container/image names or IDs.
-func (i *inspector) inspect(namesOrIDs []string) error {
+func (i *inspector) inspect(ctx context.Context, namesOrIDs []string) error {
 	// data - dumping place for inspection results.
 	var data []any
 	var errs []error
-	ctx := context.Background()
 
 	if len(namesOrIDs) == 0 {
 		if !i.options.Latest && !i.options.All {

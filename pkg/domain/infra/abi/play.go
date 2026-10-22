@@ -11,6 +11,7 @@ import (
 	"maps"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -49,6 +50,8 @@ import (
 	yamlv3 "gopkg.in/yaml.v3"
 	"sigs.k8s.io/yaml"
 )
+
+var labelValueRegexp = regexp.MustCompile(`^[a-zA-Z0-9]([a-zA-Z0-9_.-]{0,61}[a-zA-Z0-9])?$`)
 
 // sdNotifyAnnotation allows for configuring service-global and
 // container-specific sd-notify modes.
@@ -277,6 +280,7 @@ func (ic *ContainerEngine) PlayKube(ctx context.Context, body io.Reader, options
 	ipIndex := 0
 
 	var configMaps []v1.ConfigMap
+	var numReplicas int32
 
 	ranContainers := false
 	// set the ranContainers bool to true if at least one container was successfully started.
@@ -361,15 +365,21 @@ func (ic *ContainerEngine) PlayKube(ctx context.Context, body io.Reader, options
 			}
 			report.ValidationWarnings = append(report.ValidationWarnings, warnings...)
 
-			podTemplateSpec.ObjectMeta = podYAML.ObjectMeta
-			podTemplateSpec.Spec = podYAML.Spec
-
 			for name, val := range options.Annotations {
 				if podYAML.Annotations == nil {
 					podYAML.Annotations = make(map[string]string)
 				}
 				podYAML.Annotations[name] = val
 			}
+
+			// Merge CLI-specified labels into the pod's labels and validate them.
+			podYAML.Labels = mergeLabels(podYAML.Labels, options.Labels)
+			if err := validateLabels(podYAML.Labels); err != nil {
+				return nil, err
+			}
+
+			podTemplateSpec.ObjectMeta = podYAML.ObjectMeta
+			podTemplateSpec.Spec = podYAML.Spec
 
 			if err := annotations.ValidateAnnotations(podYAML.Annotations); err != nil {
 				return nil, err
@@ -413,16 +423,48 @@ func (ic *ContainerEngine) PlayKube(ctx context.Context, body io.Reader, options
 			}
 			report.ValidationWarnings = append(report.ValidationWarnings, warnings...)
 
-			r, proxies, err := ic.playKubeDeployment(ctx, &deploymentYAML, options, &ipIndex, configMaps, serviceContainer)
-			if err != nil {
-				return nil, err
+			numReplicas = 1
+			if deploymentYAML.Spec.Replicas != nil {
+				numReplicas = *deploymentYAML.Spec.Replicas
 			}
-			notifyProxies = append(notifyProxies, proxies...)
 
-			report.Pods = append(report.Pods, r.Pods...)
-			report.ValidationWarnings = append(report.ValidationWarnings, r.ValidationWarnings...)
+			if numReplicas > 1 && options.MultiplePods {
+				if len(options.PublishPorts) > 0 && len(options.PublishPorts) != int(numReplicas) {
+					return nil, fmt.Errorf("number of Pod replicas aren't equal to the number of published ports: %d replicas, %d published ports", numReplicas, len(options.PublishPorts))
+				}
+
+				for i := range numReplicas {
+					replicaOpts := options
+					if len(replicaOpts.PublishPorts) != 0 {
+						replicaOpts.PublishPorts = options.PublishPorts[i : i+1]
+					}
+					podName := fmt.Sprintf("%s-pod-%d", deploymentYAML.ObjectMeta.Name, i)
+					r, proxies, err := ic.playKubeDeployment(ctx, &deploymentYAML, replicaOpts, &ipIndex, configMaps, serviceContainer, podName)
+					if err != nil {
+						return nil, err
+					}
+					notifyProxies = append(notifyProxies, proxies...)
+
+					report.Pods = append(report.Pods, r.Pods...)
+					report.ValidationWarnings = append(report.ValidationWarnings, r.ValidationWarnings...)
+					setRanContainers(r)
+				}
+			} else {
+				if numReplicas > 1 {
+					logrus.Warnf("Limiting replica count to 1, use `--multiple-pods` to enable more than one replica")
+				}
+				podName := fmt.Sprintf("%s-pod", deploymentYAML.ObjectMeta.Name)
+				r, proxies, err := ic.playKubeDeployment(ctx, &deploymentYAML, options, &ipIndex, configMaps, serviceContainer, podName)
+				if err != nil {
+					return nil, err
+				}
+				notifyProxies = append(notifyProxies, proxies...)
+
+				report.Pods = append(report.Pods, r.Pods...)
+				report.ValidationWarnings = append(report.ValidationWarnings, r.ValidationWarnings...)
+				setRanContainers(r)
+			}
 			validKinds++
-			setRanContainers(r)
 		case "Job":
 			var jobYAML v1.Job
 
@@ -458,6 +500,12 @@ func (ic *ContainerEngine) PlayKube(ctx context.Context, body io.Reader, options
 				pvcYAML.Annotations[name] = val
 			}
 
+			// Merge CLI-provided labels into the PVC's labels and validate them.
+			pvcYAML.Labels = mergeLabels(pvcYAML.Labels, options.Labels)
+			if err := validateLabels(pvcYAML.Labels); err != nil {
+				return nil, err
+			}
+
 			if options.IsRemote {
 				if _, ok := pvcYAML.Annotations[util.VolumeImportSourceAnnotation]; ok {
 					return nil, fmt.Errorf("importing volumes is not supported for remote requests")
@@ -488,6 +536,12 @@ func (ic *ContainerEngine) PlayKube(ctx context.Context, body io.Reader, options
 				return nil, err
 			}
 			report.ValidationWarnings = append(report.ValidationWarnings, warnings...)
+
+			// Merge CLI-provided labels into the secret's labels and validate them.
+			secret.ObjectMeta.Labels = mergeLabels(secret.ObjectMeta.Labels, options.Labels)
+			if err := validateLabels(secret.ObjectMeta.Labels); err != nil {
+				return nil, err
+			}
 
 			r, err := ic.playKubeSecret(&secret)
 			if err != nil {
@@ -625,11 +679,10 @@ func (ic *ContainerEngine) playKubeDaemonSet(ctx context.Context, daemonSetYAML 
 	return &report, proxies, nil
 }
 
-func (ic *ContainerEngine) playKubeDeployment(ctx context.Context, deploymentYAML *v1apps.Deployment, options entities.PlayKubeOptions, ipIndex *int, configMaps []v1.ConfigMap, serviceContainer *libpod.Container) (*entities.PlayKubeReport, []*notifyproxy.NotifyProxy, error) {
+func (ic *ContainerEngine) playKubeDeployment(ctx context.Context, deploymentYAML *v1apps.Deployment, options entities.PlayKubeOptions, ipIndex *int, configMaps []v1.ConfigMap, serviceContainer *libpod.Container, podName string) (*entities.PlayKubeReport, []*notifyproxy.NotifyProxy, error) {
 	var (
 		deploymentName string
 		podSpec        v1.PodTemplateSpec
-		numReplicas    int32
 		report         entities.PlayKubeReport
 	)
 
@@ -637,16 +690,9 @@ func (ic *ContainerEngine) playKubeDeployment(ctx context.Context, deploymentYAM
 	if deploymentName == "" {
 		return nil, nil, errors.New("deployment does not have a name")
 	}
-	numReplicas = 1
-	if deploymentYAML.Spec.Replicas != nil {
-		numReplicas = *deploymentYAML.Spec.Replicas
-	}
-	if numReplicas > 1 {
-		logrus.Warnf("Limiting replica count to 1, more than one replica is not supported by Podman")
-	}
+
 	podSpec = deploymentYAML.Spec.Template
 
-	podName := fmt.Sprintf("%s-pod", deploymentName)
 	podReport, proxies, err := ic.playKubePod(ctx, podName, &podSpec, options, ipIndex, deploymentYAML.Annotations, configMaps, serviceContainer)
 	if err != nil {
 		return nil, nil, fmt.Errorf("encountered while bringing up pod %s: %w", podName, err)
@@ -1727,33 +1773,49 @@ func imageNamePrefix(imageName string) string {
 	return prefix
 }
 
+func extractNestedPathFromImageName(imageName string) string {
+	ref, err := reference.ParseNormalizedNamed(imageName)
+	if err != nil {
+		return imageName
+	}
+	return reference.Path(ref)
+}
+
 func getBuildFile(imageName string, cwd string) (string, error) {
-	buildDirName := imageNamePrefix(imageName)
-	containerfilePath := filepath.Join(cwd, buildDirName, "Containerfile")
-	dockerfilePath := filepath.Join(cwd, buildDirName, "Dockerfile")
+	prefix := imageNamePrefix(imageName)
+	nested := extractNestedPathFromImageName(imageName)
 
-	err := fileutils.Exists(containerfilePath)
-	if err == nil {
-		logrus.Debugf("Building %s with %s", imageName, containerfilePath)
-		return containerfilePath, nil
-	}
-	// If the error is not because the file does not exist, take
-	// a mulligan and try Dockerfile.  If that also fails, return that
-	// error
-	if !errors.Is(err, os.ErrNotExist) {
-		logrus.Error(err.Error())
+	buildDirNames := []string{prefix}
+	if nested != "" && nested != prefix {
+		buildDirNames = append(buildDirNames, nested)
 	}
 
-	err = fileutils.Exists(dockerfilePath)
-	if err == nil {
-		logrus.Debugf("Building %s with %s", imageName, dockerfilePath)
-		return dockerfilePath, nil
+	for _, buildDirName := range buildDirNames {
+		containerfilePath := filepath.Join(cwd, buildDirName, "Containerfile")
+		dockerfilePath := filepath.Join(cwd, buildDirName, "Dockerfile")
+
+		err := fileutils.Exists(containerfilePath)
+		if err == nil {
+			logrus.Debugf("Building %s with %s", imageName, containerfilePath)
+			return containerfilePath, nil
+		}
+		// If the error is not because the file does not exist, take
+		// a mulligan and try Dockerfile.  If that also fails, return that
+		// error
+		if !errors.Is(err, os.ErrNotExist) {
+			logrus.Error(err.Error())
+		}
+
+		err = fileutils.Exists(dockerfilePath)
+		if err == nil {
+			logrus.Debugf("Building %s with %s", imageName, dockerfilePath)
+			return dockerfilePath, nil
+		}
+		if !errors.Is(err, os.ErrNotExist) {
+			return "", err
+		}
 	}
-	// Strike two
-	if errors.Is(err, os.ErrNotExist) {
-		return "", nil
-	}
-	return "", err
+	return "", nil
 }
 
 func (ic *ContainerEngine) PlayKubeDown(ctx context.Context, body io.Reader, options entities.PlayKubeDownOptions) (*entities.PlayKubeReport, error) {
@@ -1826,8 +1888,17 @@ func (ic *ContainerEngine) PlayKubeDown(ctx context.Context, body io.Reader, opt
 			if deploymentYAML.Spec.Replicas != nil {
 				numReplicas = *deploymentYAML.Spec.Replicas
 			}
+			// Remove multiple Pod replicas from a Deployment resource
 			if numReplicas > 1 {
-				logrus.Warnf("Limiting replica count to 1, more than one replica is not supported by Podman")
+				for n := range numReplicas {
+					podName := fmt.Sprintf("%s-pod-%d", deploymentName, n)
+					podNames = append(podNames, podName)
+				}
+				// add a single Pod name in case a user wants to remove a single pod
+				// by applying Deployment resource file with the field "replicas" value > 1
+				podName := fmt.Sprintf("%s-pod", deploymentName)
+				podNames = append(podNames, podName)
+				break
 			}
 			podName := fmt.Sprintf("%s-pod", deploymentName)
 			podNames = append(podNames, podName)
@@ -1963,6 +2034,7 @@ func (ic *ContainerEngine) playKubeSecret(secret *v1.Secret) (*entities.SecretCr
 	storeOpts := secrets.StoreOptions{
 		DriverOpts: opts,
 		Metadata:   meta,
+		Labels:     secret.ObjectMeta.Labels,
 	}
 
 	secretID, err := secretsManager.Store(secret.Name, data, "file", storeOpts)
@@ -2011,4 +2083,45 @@ func expandForKube(s *specgen.SpecGenerator) {
 	for i, subCmd := range s.Command {
 		s.Command[i] = expansion.Expand(subCmd, mapping)
 	}
+}
+
+// mergeLabels merges the CLI-provided labels into the labels of a resource from
+// Kubernetes YAML, with CLI labels taking precedence. It returns nil if both
+// maps are empty, so callers can keep passing nil (rather than an empty map)
+// downstream.
+func mergeLabels(resourceLabels, cliLabels map[string]string) map[string]string {
+	if len(resourceLabels) == 0 && len(cliLabels) == 0 {
+		return nil
+	}
+
+	merged := maps.Clone(resourceLabels)
+	if merged == nil {
+		// resourceLabels was nil, so fall back to a copy of the CLI labels;
+		// maps.Copy into a nil map is a no-op and would drop them.
+		merged = maps.Clone(cliLabels)
+	} else {
+		maps.Copy(merged, cliLabels)
+	}
+	return merged
+}
+
+// validateLabels validates that label keys and values conform to Kubernetes label rules.
+// Label keys are validated individually with annotations.IsQualifiedName, which
+// enforces the Kubernetes qualified-name rules for keys, including the maximum
+// key length (63 characters for the name part after any optional "/" prefix).
+func validateLabels(labels map[string]string) error {
+	const maxLen = 63
+
+	for k := range labels {
+		if err := annotations.IsQualifiedName(k); err != nil {
+			return fmt.Errorf("invalid label key: %w", err)
+		}
+	}
+
+	for k, v := range labels {
+		if len(v) > maxLen || (len(v) > 0 && !labelValueRegexp.MatchString(v)) {
+			return fmt.Errorf("invalid label value %q for key %q", v, k)
+		}
+	}
+	return nil
 }

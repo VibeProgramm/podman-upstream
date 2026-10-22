@@ -19,3 +19,11 @@ func FormatLabels(labels map[string]string) string {
 	}
 	return strings.Join(list, ",")
 }
+
+// PsHeader provides column headings for container and pod listings.
+type PsHeader map[string]string
+
+// Label uses the requested label name as the column heading.
+func (h PsHeader) Label(name string) string {
+	return name
+}

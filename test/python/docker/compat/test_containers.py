@@ -318,7 +318,7 @@ class TestContainers(common.DockerTestCase):
         try:
             spec = yaml.load(open("vendor/github.com/moby/moby/api/swagger.yaml").read(), Loader=yaml.Loader)
             ctr_inspect = json.loads(self.podman.run("inspect", ctr.id).stdout)[0]
-            schema = spec['paths']["/containers/{id}/json"]["get"]['responses'][200]['schema']
+            schema = spec['paths']["/containers/{id}/json"]["get"]['responses']['200']['schema']
             schema["definitions"] = spec["definitions"]
 
             OAS31Validator.check_schema(schema)

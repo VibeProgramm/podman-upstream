@@ -10,10 +10,16 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync/atomic"
 
 	"github.com/sirupsen/logrus"
 	"golang.org/x/sys/unix"
 )
+
+// PIDFD_SIGNAL_PROCESS_GROUP, added in Linux 6.9, not yet in golang.org/x/sys/unix.
+const pidfdSignalProcessGroup = 1 << 2
+
+var processGroupSignalUnsupported atomic.Bool
 
 type pidfdHandle struct {
 	pidfd        int
@@ -121,7 +127,9 @@ func NewPIDHandleFromString(pid int, pidData string) (PIDHandle, error) {
 		defer unix.Close(fd)
 		pidfd, err := openByHandleAt(fd, fh, unix.O_CLOEXEC)
 		if err != nil {
-			if errors.Is(err, unix.ESTALE) {
+			// The process is gone: ESTALE once it has been reaped, ESRCH
+			// while it is being reaped (pidfs_export_open).
+			if errors.Is(err, unix.ESTALE) || errors.Is(err, unix.ESRCH) {
 				h.normalHandle.pidData = noSuchProcessID
 				return &h, nil
 			}
@@ -158,6 +166,22 @@ func (h *pidfdHandle) Kill(signal unix.Signal) error {
 	}
 
 	return h.normalHandle.Kill(signal)
+}
+
+// Sends the signal to the process's entire process group.
+func (h *pidfdHandle) KillProcessGroup(signal unix.Signal) error {
+	if h.pidfd > -1 && !processGroupSignalUnsupported.Load() {
+		err := pidfdSendSignal(h.pidfd, signal, nil, pidfdSignalProcessGroup)
+		if err == nil {
+			return nil
+		}
+		if !errors.Is(err, unix.EINVAL) {
+			return err
+		}
+		processGroupSignalUnsupported.Store(true)
+	}
+
+	return h.normalHandle.KillProcessGroup(signal)
 }
 
 // Returns true in case the process is still alive.

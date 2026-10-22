@@ -675,10 +675,18 @@ func DefineCreateFlags(cmd *cobra.Command, cf *entities.ContainerCreateOptions, 
 		startupHCIntervalFlagName := "health-startup-interval"
 		createFlags.StringVar(
 			&cf.StartupHCInterval,
-			startupHCIntervalFlagName, define.DefaultHealthCheckInterval,
+			startupHCIntervalFlagName, define.DefaultHealthCheckStartInterval,
 			"Set an interval for the startup healthcheck. "+info,
 		)
 		_ = cmd.RegisterFlagCompletionFunc(startupHCIntervalFlagName, completion.AutocompleteNone)
+
+		startHCIntervalFlagName := "health-start-interval"
+		createFlags.StringVar(
+			&cf.StartupHCInterval,
+			startHCIntervalFlagName, define.DefaultHealthCheckStartInterval,
+			"The alias of --health-startup-interval option",
+		)
+		_ = cmd.RegisterFlagCompletionFunc(startHCIntervalFlagName, completion.AutocompleteNone)
 
 		startupHCRetriesFlagName := "health-startup-retries"
 		createFlags.UintVar(
@@ -943,16 +951,22 @@ func DefineCreateFlags(cmd *cobra.Command, cf *entities.ContainerCreateOptions, 
 		createFlags.Uint64Var(
 			&cf.CPURTPeriod,
 			cpuRtPeriodFlagName, 0,
-			"Limit the CPU real-time period in microseconds",
+			"",
 		)
+		// TODO (7.0): remove the cpu-rt-period flag, it requires cgroups v1
+		// which is no longer supported and is a NOP (#29750).
+		_ = createFlags.MarkHidden(cpuRtPeriodFlagName)
 		_ = cmd.RegisterFlagCompletionFunc(cpuRtPeriodFlagName, completion.AutocompleteNone)
 
 		cpuRtRuntimeFlagName := "cpu-rt-runtime"
 		createFlags.Int64Var(
 			&cf.CPURTRuntime,
 			cpuRtRuntimeFlagName, 0,
-			"Limit the CPU real-time runtime in microseconds",
+			"",
 		)
+		// TODO (7.0): remove the cpu-rt-runtime flag, it requires cgroups v1
+		// which is no longer supported and is a NOP (#29750).
+		_ = createFlags.MarkHidden(cpuRtRuntimeFlagName)
 		_ = cmd.RegisterFlagCompletionFunc(cpuRtRuntimeFlagName, completion.AutocompleteNone)
 
 		memoryReservationFlagName := "memory-reservation"

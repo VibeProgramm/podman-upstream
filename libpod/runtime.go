@@ -473,7 +473,6 @@ func makeRuntime(ctx context.Context, runtime *Runtime) (retErr error) {
 		needsUserns = !hasCapSysAdmin
 	}
 	// Set up containers/storage
-	var store storage.Store
 	if needsUserns {
 		logrus.Debug("Not configuring container store")
 	} else if err := runtime.configureStore(); err != nil {
@@ -488,10 +487,10 @@ func makeRuntime(ctx context.Context, runtime *Runtime) (retErr error) {
 		return fmt.Errorf("configure storage: %w", err)
 	}
 	defer func() {
-		if retErr != nil && store != nil {
+		if retErr != nil && runtime.store != nil {
 			// Don't forcibly shut down
 			// We could be opening a store in use by another libpod
-			if _, err := store.Shutdown(false); err != nil {
+			if _, err := runtime.store.Shutdown(false); err != nil {
 				logrus.Errorf("Removing store for partially-created runtime: %s", err)
 			}
 		}
@@ -506,6 +505,7 @@ func makeRuntime(ctx context.Context, runtime *Runtime) (retErr error) {
 	runtime.ociRuntimes = make(map[string]OCIRuntime)
 
 	// Initialize remaining OCI runtimes
+	var defaultOCIRuntimeErr error
 	for name, paths := range runtime.config.Engine.OCIRuntimes {
 		ociRuntime, err := newConmonOCIRuntime(name, paths, runtime.conmonPath, runtime.runtimeFlags, runtime.config)
 		if err != nil {
@@ -514,6 +514,9 @@ func makeRuntime(ctx context.Context, runtime *Runtime) (retErr error) {
 			// runtimes that might not be installed (crun, kata).
 			// Only an infof so default configs don't spec errors.
 			logrus.Debugf("Configured OCI runtime %s initialization failed: %v", name, err)
+			if name == runtime.config.Engine.OCIRuntime {
+				defaultOCIRuntimeErr = err
+			}
 			continue
 		}
 
@@ -535,6 +538,9 @@ func makeRuntime(ctx context.Context, runtime *Runtime) (retErr error) {
 		} else {
 			ociRuntime, ok := runtime.ociRuntimes[runtime.config.Engine.OCIRuntime]
 			if !ok {
+				if defaultOCIRuntimeErr != nil {
+					return fmt.Errorf("default OCI runtime %q failed to initialize: %w", runtime.config.Engine.OCIRuntime, defaultOCIRuntimeErr)
+				}
 				return fmt.Errorf("default OCI runtime %q not found: %w", runtime.config.Engine.OCIRuntime, define.ErrInvalidArg)
 			}
 			runtime.defaultOCIRuntime = ociRuntime

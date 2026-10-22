@@ -63,6 +63,10 @@ func (s *APIServer) registerKubeHandlers(r *mux.Router) error {
 	//    type: string
 	//    description: JSON encoded value of annotations (a map[string]string).
 	//  - in: query
+	//    name: labels
+	//    type: string
+	//    description: JSON encoded value of labels (a map[string]string).
+	//  - in: query
 	//    name: logDriver
 	//    type: string
 	//    description: Logging driver for the containers in the pod.
@@ -72,6 +76,10 @@ func (s *APIServer) registerKubeHandlers(r *mux.Router) error {
 	//    description: logging driver options
 	//    items:
 	//         type: string
+	//  - in: query
+	//    name: multiplepods
+	//    type: boolean
+	//    description: Allow creation of multiple pod replicas from a Deployment
 	//  - in: query
 	//    name: network
 	//    type: array

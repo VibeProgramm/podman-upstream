@@ -19,8 +19,8 @@ var dialStdioCommand = &cobra.Command{
 	Short:  "Proxy the stdio stream to the daemon connection. Should not be invoked manually.",
 	Args:   validate.NoArgs,
 	Hidden: true,
-	RunE: func(_ *cobra.Command, _ []string) error {
-		return runDialStdio()
+	RunE: func(cmd *cobra.Command, _ []string) error {
+		return runDialStdio(cmd.Context())
 	},
 	Example: "podman system dial-stdio",
 }
@@ -32,8 +32,7 @@ func init() {
 	})
 }
 
-func runDialStdio() error {
-	ctx := registry.Context()
+func runDialStdio(ctx context.Context) error {
 	cfg := registry.PodmanConfig()
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -77,6 +76,9 @@ func runDialStdio() error {
 		// wait for stdout
 		err = <-conn2stdout
 	case err = <-conn2stdout:
+		// return immediately
+	case <-ctx.Done():
+		err = ctx.Err()
 		// return immediately
 	}
 	return err

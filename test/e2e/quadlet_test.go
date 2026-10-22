@@ -937,12 +937,102 @@ BOGUS=foo
 		})
 	})
 
+	It("Should discover template instances from drop-in directories", func() {
+		templateFile := "template@.container"
+		instanceFile := "template@instance.container"
+		template := loadQuadletTestcase(filepath.Join("quadlet", templateFile))
+		// Reuse the instance assertions without copying its unit file.
+		instance := loadQuadletTestcase(filepath.Join("quadlet", instanceFile))
+
+		err = os.WriteFile(filepath.Join(quadletDir, templateFile), template.data, 0o644)
+		Expect(err).ToNot(HaveOccurred())
+
+		for _, fileName := range []string{templateFile, instanceFile} {
+			dropinDir := fileName + ".d"
+			destination := filepath.Join(quadletDir, dropinDir)
+			err = os.Mkdir(destination, os.ModePerm)
+			Expect(err).ToNot(HaveOccurred())
+			err = CopyDirectory(filepath.Join("quadlet", dropinDir), destination)
+			Expect(err).ToNot(HaveOccurred())
+		}
+
+		err = os.Mkdir(filepath.Join(quadletDir, "template@empty.container.d"), os.ModePerm)
+		Expect(err).ToNot(HaveOccurred())
+		_, err = os.Lstat(filepath.Join(quadletDir, "template@empty.container"))
+		Expect(err).To(MatchError(os.ErrNotExist))
+
+		_, err = os.Lstat(filepath.Join(quadletDir, instanceFile))
+		Expect(err).To(MatchError(os.ErrNotExist))
+
+		var args []string
+		if isRootless() {
+			args = append(args, "--user")
+		}
+		args = append(args, "--no-kmsg-log", generatedDir)
+		session := podmanTest.Quadlet(args, quadletDir)
+		session.WaitWithDefaultTimeout()
+		Expect(session).Should(ExitCleanly())
+
+		template.check(generatedDir, session)
+		instance.check(generatedDir, session)
+		empty := &quadletTestcase{
+			serviceName: "template@empty.service",
+			checks: [][]string{
+				{"assert-podman-final-args", "localhost/imagename"},
+				{"assert-podman-args", "--name", "systemd-%p_%i"},
+				{"assert-podman-args", "--env", "FOO=bar"},
+				{"assert-symlink", "want.service.wants/template@empty.service", "../template@empty.service"},
+			},
+		}
+		empty.check(generatedDir, session)
+	})
+
 	It("Should not leave temp files after generating service files", func() {
 		runSuccessQuadletTestCase("basic.container")
 
 		matches, err := filepath.Glob(filepath.Join(generatedDir, ".tmp-basic.service*"))
 		Expect(err).ToNot(HaveOccurred())
 		Expect(matches).To(BeEmpty())
+	})
+
+	It("Should load drop-ins for symlinked template unit files", func() {
+		// External directory simulating /etc/containers/systemd
+		externalDir := filepath.Join(podmanTest.TempDir, "external")
+		Expect(os.MkdirAll(externalDir, os.ModePerm)).To(Succeed())
+
+		// Template unit file in external dir
+		templateContent := "[Container]\nImage=localhost/imagename\n\n[Install]\nWantedBy=default.target\n"
+		Expect(os.WriteFile(filepath.Join(externalDir, "test@.container"), []byte(templateContent), 0o644)).To(Succeed())
+
+		// Drop-in directory in external dir
+		dropinDir := filepath.Join(externalDir, "test@.container.d")
+		Expect(os.MkdirAll(dropinDir, os.ModePerm)).To(Succeed())
+		dropinContent := "[Container]\nEnvironment=TEST_ENV=from_dropin\n"
+		Expect(os.WriteFile(filepath.Join(dropinDir, "10-override.conf"), []byte(dropinContent), 0o644)).To(Succeed())
+
+		// Symlink template unit into user quadletDir
+		Expect(os.Symlink(filepath.Join(externalDir, "test@.container"), filepath.Join(quadletDir, "test@.container"))).To(Succeed())
+
+		var args []string
+		if isRootless() {
+			args = append(args, "--user")
+		}
+		args = append(args, "--no-kmsg-log", generatedDir)
+		session := podmanTest.Quadlet(args, quadletDir)
+		session.WaitWithDefaultTimeout()
+		Expect(session).Should(Exit(0))
+
+		generatedService := filepath.Join(generatedDir, "test@.service")
+		unit, err := parser.ParseUnitFile(generatedService)
+		Expect(err).ToNot(HaveOccurred())
+
+		env, ok := unit.Lookup("X-Container", "Environment")
+		Expect(ok).To(BeTrue())
+		Expect(env).To(Equal("TEST_ENV=from_dropin"))
+
+		execStart, ok := unit.Lookup("Service", "ExecStart")
+		Expect(ok).To(BeTrue())
+		Expect(execStart).To(ContainSubstring("--env TEST_ENV=from_dropin"))
 	})
 
 	DescribeTable("Running success quadlet test case",
@@ -1035,6 +1125,9 @@ BOGUS=foo
 		Entry("NetworkAlias", "network-alias.container"),
 		Entry("CgroupMode", "cgroups-mode.container"),
 		Entry("Container - No Default Dependencies", "no_deps.container"),
+		Entry("Container - Wants Mount Dependency", "mounts-dependency-wants.container"),
+		Entry("Container - Requires Mount Dependency", "mounts-dependency-requires.container"),
+		Entry("Container - No Mount Dependency", "mounts-dependency-none.container"),
 		Entry("retry.container", "retry.container"),
 		Entry("reloadcmd.container", "reloadcmd.container"),
 		Entry("reloadsignal.container", "reloadsignal.container"),
@@ -1200,6 +1293,7 @@ BOGUS=foo
 
 	DescribeTable("Running expected error quadlet test case",
 		runErrorQuadletTestCase,
+		Entry("SetMountsDependency - invalid value", "mounts-dependency-invalid.container", "converting \"mounts-dependency-invalid.container\": unsupported value for SetMountsDependency: invalid"),
 		Entry("idmapping-with-remap.container", "idmapping-with-remap.container", "converting \"idmapping-with-remap.container\": deprecated Remap keys are set along with explicit mapping keys"),
 		Entry("noimage.container", "noimage.container", "converting \"noimage.container\": no Image or Rootfs key specified"),
 		Entry("pod.non-quadlet.container", "pod.non-quadlet.container", "converting \"pod.non-quadlet.container\": pod test-pod is not Quadlet based"),

@@ -168,11 +168,26 @@ and the template systemd service can be used as a regular template.
 For example, "foo@.container" will generate "foo@.service" and you can
 then "systemctl start foo@bar.service".
 
-Secondly, if you make a symlink like "foo@instance.container", that
-will generate an instantiated template file. When generating this file
-quadlet will read drop-in files both from the instanced directory
+Secondly, an instance-specific drop-in directory such as
+`foo@instance.container.d/` creates an instance from `foo@.container`,
+without requiring a `foo@instance.container` file or symlink. You can
+also create an instance explicitly with a file or a symlink like
+`foo@instance.container`. When generating this instance,
+Quadlet will read drop-in files both from the instanced directory
 (foo@instance.container.d) and the template directory
 (foo@.container.d). This allows customization of individual instances.
+
+An empty instance drop-in directory also creates an instance from the matching
+template. The instance inherits the template's settings and template drop-ins,
+including `[Install]` settings, so it can receive startup symlinks even without
+instance-specific overrides.
+
+The template and its instance drop-ins may be in different Quadlet search
+directories. An explicit instance file or symlink takes precedence over
+creating an instance from a drop-in directory. Without an explicit instance,
+relative paths are resolved relative to the template file. A drop-in directory
+without a matching template does not create a unit. This also applies to other
+Quadlet types, such as `net@abc.network.d/` with `net@.network`.
 
 Instanced template files (like `foo@bar.container`) can be enabled
 just like non-templated ones. However, templated ones
@@ -180,7 +195,7 @@ just like non-templated ones. However, templated ones
 instantiated. If the `[Install]` section contains a `DefaultInstance=`
 key, then that instance will be enabled, but if not, nothing will
 happen and the options will only be used as the default for units
-that are instantiated using symlinks.
+that are instantiated using drop-in directories, files, or symlinks.
 
 An example template file `sleep@.container` might look like this:
 
@@ -207,10 +222,10 @@ running that sleeps for 100 seconds. You can then do something like
 sleeps 50 seconds, or alternatively another service can start it via a
 dependency like `Wants=sleep@50.service`.
 
-In addition, if you do `ln -s sleep@.container sleep@10.container` you
-will also have a 10 second sleep running at boot. And, if you want
-that particular instance to be running with another image, you can
-create a drop-in file like `sleep@10.container.d/10-image.conf`:
+To create a 10 second sleep instance using another image, create a drop-in
+file like `sleep@10.container.d/10-image.conf`. No `sleep@10.container`
+file or symlink is required. This instance also starts at boot because it
+inherits the template's `[Install]` settings:
 ```
 [Container]
 Image=quay.io/centos/centos
@@ -1675,7 +1690,8 @@ This key can be listed multiple times.
 
 Volume files are named with a `.volume` extension and contain a section `[Volume]` describing the
 named Podman volume. The generated service is a one-time command that ensures that the volume
-exists on the host, creating it if needed.
+exists on the host, creating it if needed. Unlike `.network`, `.image`, and `.artifact` oneshot units,
+the generated service for `.volume` units does not set `RemainAfterExit=yes` by default.
 
 By default, the Podman volume has the same name as the unit, but with a `systemd-` prefix, i.e. for
 a volume file named `$NAME.volume`, the generated Podman volume is called `systemd-$NAME`, and the
@@ -2377,6 +2393,7 @@ Valid options for `[Quadlet]` are listed below:
 | **[Quadlet] options**      | **Description**                                   |
 |----------------------------|---------------------------------------------------|
 | DefaultDependencies=false  | Disable implicit network dependencies to the unit |
+| SetMountsDependency=       | Configure dependencies for mount source paths     |
 
 ### `DefaultDependencies=`
 
@@ -2387,6 +2404,28 @@ When set to false, Quadlet will **not** add a dependency (After=, Wants=) to
 
 Note, this option is set in the `[Quadlet]` section. The _systemd_ `[Unit]` section
 has an option with the same name but a different meaning.
+
+### `SetMountsDependency=`
+
+Configure the systemd mount dependency generated for mount source paths. This option applies
+to all mount source paths in the Quadlet file.
+
+Valid values are:
+
+- `Requires` (default): add `RequiresMountsFor=`. The service is stopped if the mount becomes
+  inactive.
+- `Wants` (systemd 256 or later): add `WantsMountsFor=`. The mount is started when the service
+  starts, but the service is not stopped if the mount becomes inactive.
+- `None`: do not add a mount dependency.
+
+This setting does not change Quadlet's dependency on its container storage directory.
+
+For example, to use a weaker dependency for an automount share:
+
+```
+[Quadlet]
+SetMountsDependency=Wants
+```
 
 ## EXAMPLES
 

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -11,6 +12,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
@@ -135,8 +137,8 @@ func init() {
 	rootCmd.SetUsageTemplate(usageTemplate)
 }
 
-func Execute() {
-	if cmd, err := rootCmd.ExecuteContextC(registry.Context()); err != nil {
+func Execute(ctx context.Context) {
+	if cmd, err := rootCmd.ExecuteContextC(ctx); err != nil {
 		if registry.GetExitCode() == 0 {
 			registry.SetExitCode(define.ExecErrorCodeGeneric)
 		}
@@ -151,6 +153,7 @@ func Execute() {
 	_ = shutdown.Stop()
 
 	if requireCleanup {
+		cleanupContext, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		// The cobra post-run is not being executed in case of
 		// a previous error, so make sure that the engine(s)
 		// are correctly shutdown.
@@ -158,11 +161,12 @@ func Execute() {
 		// See https://github.com/spf13/cobra/issues/914
 		logrus.Debugf("Shutting down engines")
 		if engine := registry.ImageEngine(); engine != nil {
-			engine.Shutdown(registry.Context())
+			engine.Shutdown(cleanupContext)
 		}
 		if engine := registry.ContainerEngine(); engine != nil {
-			engine.Shutdown(registry.Context())
+			engine.Shutdown(cleanupContext)
 		}
+		cancel()
 	}
 
 	os.Exit(registry.GetExitCode())
@@ -266,14 +270,14 @@ func setupRemoteConnection(podmanConfig *entities.PodmanConfig) string {
 func persistentPreRunE(cmd *cobra.Command, args []string) error {
 	logrus.Debugf("Called %s.PersistentPreRunE(%s)", cmd.Name(), strings.Join(os.Args, " "))
 
-	checkSupportedCgroups()
-
 	// Help, completion and commands with subcommands are special cases, no need for more setup
 	// Completion cmd is used to generate the shell scripts
 	if cmd.Name() == "help" || cmd.Name() == "completion" || cmd.HasSubCommands() {
 		requireCleanup = false
 		return nil
 	}
+
+	checkSupportedCgroups()
 
 	podmanConfig := registry.PodmanConfig()
 
@@ -431,7 +435,7 @@ func persistentPreRunE(cmd *cobra.Command, args []string) error {
 		if flag := cmd.LocalFlags().Lookup("cgroups"); flag != nil {
 			cgroupMode = flag.Value.String()
 		}
-		err := registry.ContainerEngine().SetupRootless(registry.Context(), noMoveProcess, cgroupMode)
+		err := registry.ContainerEngine().SetupRootless(cmd.Context(), noMoveProcess, cgroupMode)
 		if err != nil {
 			return err
 		}

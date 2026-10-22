@@ -656,7 +656,7 @@ is_pause_process (long pid)
   if (asprintf (&environ_path, "/proc/%ld/environ", pid) < 0)
     return 0;
 
-  buf = malloc (buf_size);
+  buf = malloc (buf_size + 1);
   if (buf == NULL)
     return 0;
 
@@ -668,6 +668,7 @@ is_pause_process (long pid)
   n = TEMP_FAILURE_RETRY (read (fd, buf, buf_size));
   if (n <= 0)
     return 0;
+  buf[n] = '\0';
 
   /* environ entries are separated by '\0'.  Search for "_PODMAN_PAUSE=1".  */
   for (char *p = buf; p < buf + n; )
@@ -1099,6 +1100,7 @@ create_pause_process (const char *state_dir, char **argv)
           for (fd = 3; fd < open_files_max_fd + 16; fd++)
             close (fd);
 
+          clearenv ();
           setenv ("_PODMAN_PAUSE", "1", 1);
           execlp (argv[0], argv[0], NULL);
 
@@ -1282,6 +1284,25 @@ check_proc_sys_userns_file (const char *path)
     }
 }
 
+void
+close_systemd_activation_fds (void)
+{
+  if (do_socket_activation)
+    {
+      long num_fds;
+
+      num_fds = strtol (saved_systemd_listen_fds, NULL, 10);
+      if (num_fds != LONG_MIN && num_fds != LONG_MAX)
+        {
+          int f;
+
+          for (f = 3; f < num_fds + 3; f++)
+            if (is_fd_inherited (f))
+              close (f);
+        }
+    }
+}
+
 int
 reexec_in_user_namespace (int ready, char *state_dir)
 {
@@ -1316,17 +1337,6 @@ reexec_in_user_namespace (int ready, char *state_dir)
     {
       if (do_socket_activation)
         {
-          long num_fds;
-
-          num_fds = strtol (saved_systemd_listen_fds, NULL, 10);
-          if (num_fds != LONG_MIN && num_fds != LONG_MAX)
-            {
-              int f;
-
-              for (f = 3; f < num_fds + 3; f++)
-                if (is_fd_inherited (f))
-                  close (f);
-            }
           unsetenv ("LISTEN_PID");
           unsetenv ("LISTEN_FDS");
           unsetenv ("LISTEN_FDNAMES");

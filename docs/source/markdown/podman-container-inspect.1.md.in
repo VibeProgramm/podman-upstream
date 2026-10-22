@@ -40,7 +40,9 @@ Valid placeholders for the Go template are listed below:
 | .Image                   | Container image ID (64-char hash)                  |
 | .ImageDigest             | Container image digest (sha256:+64-char hash)      |
 | .ImageName               | Container image name (string)                      |
+| .InitContainerType       | Type of init container if applicable (string)      |
 | .IsInfra                 | Is this an infra container? (string: true/false)   |
+| .IsInitCtr               | Is this an init container? (string: true/false)    |
 | .IsService               | Is this a service container? (string: true/false)  |
 | .KubeExitCodePropagation | Kube exit-code propagation (string)                |
 | .LockNumber              | Number of the container's Libpod lock              |
@@ -326,6 +328,12 @@ Inspect the latest container created for its EffectiveCaps field. (This option i
 ```
 $ podman container inspect --latest --format {{.EffectiveCaps}}
 [CAP_CHOWN CAP_DAC_OVERRIDE CAP_FOWNER CAP_FSETID CAP_KILL CAP_NET_BIND_SERVICE CAP_SETFCAP CAP_SETGID CAP_SETPCAP CAP_SETUID]
+```
+
+Inspect the specified container to check whether it is an init container and its type.
+```
+$ podman container inspect my-init-ctr --format "{{.IsInitCtr}} {{.InitContainerType}}"
+true always
 ```
 
 ## SEE ALSO

@@ -1,6 +1,7 @@
 package shim
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net"
@@ -23,6 +24,7 @@ const (
 	dockerSock           = "/var/run/docker.sock"
 	defaultGuestSock     = "/run/user/%d/podman/podman.sock"
 	dockerConnectTimeout = 5 * time.Second
+	sshReadinessTimeout  = 30 * time.Second
 )
 
 var (
@@ -30,7 +32,7 @@ var (
 	ErrSSHNotListening = errors.New("machine is not listening on ssh port")
 )
 
-func startHostForwarder(mc *vmconfigs.MachineConfig, provider vmconfigs.VMProvider, dirs *define.MachineDirs, hostSocks []string) error {
+func startHostForwarder(mc *vmconfigs.MachineConfig, provider vmconfigs.VMProvider, dirs *define.MachineDirs, hostSocks []string) (*machine.GvProxyNotifier, error) {
 	forwardUser := mc.SSH.RemoteUsername
 
 	// TODO should this go up the stack higher or
@@ -43,12 +45,12 @@ func startHostForwarder(mc *vmconfigs.MachineConfig, provider vmconfigs.VMProvid
 
 	cfg, err := config.Default()
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	binary, err := cfg.FindHelperBinary(machine.ForwarderBinaryName, false)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	cmd := gvproxy.NewGvproxyCommand()
@@ -77,49 +79,95 @@ func startHostForwarder(mc *vmconfigs.MachineConfig, provider vmconfigs.VMProvid
 	// This allows a provider to perform additional setup as well as
 	// add in any provider specific options for gvproxy
 	if err := provider.StartNetworking(mc, &cmd); err != nil {
-		return err
+		return nil, err
 	}
 
 	c := cmd.Cmd(binary)
 	setGvproxyProcessAttributes(c)
 
-	logrus.Debugf("gvproxy command-line: %s %s", binary, strings.Join(cmd.ToCmdline(), " "))
+	gvProxyNotifier, err := machine.NewGvProxyNotifier(runDir.GetPath())
+	if err != nil {
+		return nil, fmt.Errorf("setting up gvproxy notification listener: %w", err)
+	}
+	// Ensure "unix:///absolute/path" form so gvproxy's url.Parse keeps
+	// the host empty and puts the full path into uri.Path.
+	socketPath := filepath.ToSlash(gvProxyNotifier.SocketPath())
+	if !strings.HasPrefix(socketPath, "/") {
+		socketPath = "/" + socketPath
+	}
+	c.Args = append(c.Args, "-notification", "unix://"+socketPath)
+
+	logrus.Debugf("gvproxy command-line: %s", strings.Join(c.Args, " "))
 	if err := c.Start(); err != nil {
-		return fmt.Errorf("unable to execute: %q: %w", cmd.ToCmdline(), err)
+		gvProxyNotifier.Close()
+		machine.CleanupGvProxyNotifySocket(runDir.GetPath())
+		return nil, fmt.Errorf("unable to execute: %q: %w", cmd.ToCmdline(), err)
 	}
 
-	return nil
+	return gvProxyNotifier, nil
 }
 
-func startNetworking(mc *vmconfigs.MachineConfig, provider vmconfigs.VMProvider) (string, machine.APIForwardingState, error) {
+func startNetworking(mc *vmconfigs.MachineConfig, provider vmconfigs.VMProvider) (string, machine.APIForwardingState, *machine.GvProxyNotifier, error) {
+	// An externally stopped VM can leave its host proxy behind. On Windows,
+	// clean up a verified orphan before checking the SSH port; otherwise the
+	// orphan itself can cause an unnecessary port reassignment.
+	if err := cleanupStaleHostForwarder(mc, provider); err != nil {
+		return "", 0, nil, err
+	}
+
+	if err := removeStaleAPISocket(mc, provider); err != nil {
+		return "", 0, nil, err
+	}
+
 	// Check if SSH port is in use, and reassign if necessary
 	if !ports.IsLocalPortAvailable(mc.SSH.Port) {
 		logrus.Warnf("detected port conflict on machine ssh port [%d], reassigning", mc.SSH.Port)
 		if err := reassignSSHPort(mc, provider); err != nil {
-			return "", 0, err
+			return "", 0, nil, err
 		}
 	}
 
 	// Provider has its own networking code path (e.g. WSL)
 	if provider.UseProviderNetworkSetup() {
-		return "", 0, provider.StartNetworking(mc, nil)
+		return "", 0, nil, provider.StartNetworking(mc, nil)
 	}
 
 	dirs, err := env.GetMachineDirs(provider.VMType())
 	if err != nil {
-		return "", 0, err
+		return "", 0, nil, err
 	}
 
 	hostSocks, forwardSock, forwardingState, err := setupMachineSockets(mc, dirs)
 	if err != nil {
-		return "", 0, err
+		return "", 0, nil, err
 	}
 
-	if err := startHostForwarder(mc, provider, dirs, hostSocks); err != nil {
-		return "", 0, err
+	gvProxyNotifier, err := startHostForwarder(mc, provider, dirs, hostSocks)
+	if err != nil {
+		return "", 0, nil, err
 	}
 
-	return forwardSock, forwardingState, nil
+	return forwardSock, forwardingState, gvProxyNotifier, nil
+}
+
+// removeStaleAPISocket deletes the API socket left behind by a host proxy
+// that did not exit cleanly (e.g. when the host shuts down). The new proxy
+// fails to listen on it otherwise.
+func removeStaleAPISocket(mc *vmconfigs.MachineConfig, provider vmconfigs.VMProvider) error {
+	sock, err := mc.APISocket()
+	if err != nil {
+		return err
+	}
+	if err := sock.Delete(); err != nil {
+		// On WSL the socket belongs to win-sshproxy, which only serves the API
+		// (SSH does not go through it), so the machine is usable without it.
+		if provider.UseProviderNetworkSetup() { // WSL
+			logrus.Warnf("unable to remove stale API socket %q: %v", sock.GetPath(), err)
+			return nil
+		}
+		return fmt.Errorf("removing stale API socket %q: %w", sock.GetPath(), err)
+	}
+	return nil
 }
 
 // conductVMReadinessCheck checks to make sure the machine is in the proper state
@@ -151,13 +199,21 @@ func conductVMReadinessCheck(mc *vmconfigs.MachineConfig, maxBackoffs int, backo
 		// CoreOS users have reported the same observation but
 		// the underlying source of the issue remains unknown.
 
-		if sshError = machine.LocalhostSSHSilent(mc.SSH.RemoteUsername, mc.SSH.IdentityPath, mc.Name, mc.SSH.Port, []string{"true"}); sshError != nil {
-			logrus.Debugf("SSH readiness check for machine failed: %v", sshError)
-			continue
+		// Use a timeout context for the SSH readiness check to prevent indefinite blocking
+		// when the SSH server hangs (e.g., due to interoperability issues like OpenSSH 10.2p1)
+		func() {
+			ctx, cancel := context.WithTimeout(context.Background(), sshReadinessTimeout)
+			defer cancel()
+			if sshError = machine.LocalhostSSHWithCtx(ctx, mc.SSH.RemoteUsername, mc.SSH.IdentityPath, mc.Name, mc.SSH.Port, []string{"true"}); sshError != nil {
+				logrus.Debugf("SSH readiness check for machine failed: %v", sshError)
+				return
+			}
+			connected = true
+			sshError = nil
+		}()
+		if connected {
+			break
 		}
-		connected = true
-		sshError = nil
-		break
 	}
 	return connected, sshError, err
 }

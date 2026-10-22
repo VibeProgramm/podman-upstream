@@ -65,7 +65,7 @@ func (c *Container) initUnlocked(ctx context.Context, recursive bool) (retErr er
 		}
 	}()
 
-	if err := c.prepare(); err != nil {
+	if err := c.prepare(ctx); err != nil {
 		return err
 	}
 
@@ -146,6 +146,10 @@ func (c *Container) Update(updateOptions *entities.ContainerUpdateOptions) error
 		return err
 	}
 	if changedStartupHealthCheck {
+		// Same restriction as on container creation, see validate().
+		if !startupHealthCheckConfig.IsNil() && c.config.HealthCheckConfig == nil {
+			return fmt.Errorf("cannot set a startup healthcheck when there is no regular healthcheck: %w", define.ErrInvalidArg)
+		}
 		if err := c.updateHealthCheck(
 			startupHealthCheckConfig,
 			&StartupHealthCheckConfig{StartupHealthCheck: c.config.StartupHealthCheckConfig},
@@ -1142,7 +1146,7 @@ func (c *Container) ShouldStartOnBoot() bool {
 
 // CopyFromArchive copies the contents from the specified tarStream to path
 // *inside* the container.
-func (c *Container) CopyFromArchive(_ context.Context, containerPath string, chown, noOverwriteDirNonDir bool, rename map[string]string, tarStream io.Reader) (func() error, error) {
+func (c *Container) CopyFromArchive(ctx context.Context, containerPath string, chown, noOverwriteDirNonDir bool, rename map[string]string, tarStream io.Reader) (func() error, error) {
 	if !c.batched {
 		c.lock.Lock()
 		defer c.lock.Unlock()
@@ -1152,12 +1156,12 @@ func (c *Container) CopyFromArchive(_ context.Context, containerPath string, cho
 		}
 	}
 
-	return c.copyFromArchive(containerPath, chown, noOverwriteDirNonDir, rename, tarStream)
+	return c.copyFromArchive(ctx, containerPath, chown, noOverwriteDirNonDir, rename, tarStream)
 }
 
 // CopyToArchive copies the contents from the specified path *inside* the
 // container to the tarStream.
-func (c *Container) CopyToArchive(_ context.Context, containerPath string, tarStream io.Writer) (func() error, error) {
+func (c *Container) CopyToArchive(ctx context.Context, containerPath string, tarStream io.Writer) (func() error, error) {
 	if !c.batched {
 		c.lock.Lock()
 		defer c.lock.Unlock()
@@ -1167,11 +1171,11 @@ func (c *Container) CopyToArchive(_ context.Context, containerPath string, tarSt
 		}
 	}
 
-	return c.copyToArchive(containerPath, tarStream)
+	return c.copyToArchive(ctx, containerPath, tarStream)
 }
 
 // Stat the specified path *inside* the container and return a file info.
-func (c *Container) Stat(_ context.Context, containerPath string) (*define.FileInfo, error) {
+func (c *Container) Stat(ctx context.Context, containerPath string) (*define.FileInfo, error) {
 	if !c.batched {
 		c.lock.Lock()
 		defer c.lock.Unlock()
@@ -1197,7 +1201,8 @@ func (c *Container) Stat(_ context.Context, containerPath string) (*define.FileI
 		}()
 	}
 
-	info, _, _, err := c.stat(mountPoint, containerPath)
+	info, resolved, err := c.stat(ctx, mountPoint, containerPath)
+	resolved.close()
 	return info, err
 }
 

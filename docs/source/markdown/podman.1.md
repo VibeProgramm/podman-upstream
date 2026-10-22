@@ -30,13 +30,18 @@ use quadlet files. See **podman-quadlet**(1) and **podman-systemd.unit**(5).
 
 #### **--cdi-spec-dir**=*path*
 
-The CDI spec directory path (may be set multiple times). Default path is `/etc/cdi`.
+The CDI spec directory path. When used multiple times, paths from later options have higher precedence.
+
+Default paths are `/etc/cdi` and `/var/run/cdi` in order of increasing precedence.
+This can be configured using `engine.cdi_spec_dirs` in `containers.conf`.
 
 #### **--cgroup-manager**=*manager*
 
 The CGroup manager to use for container cgroups. Supported values are __cgroupfs__ or __systemd__. Default is _systemd_ unless overridden in the containers.conf file.
 
 Note: Setting this flag can cause certain commands to break when called on containers previously created by the other CGroup manager type.
+
+__cgroupfs__ doesn't work in Rootless mode and containers cgroups aren't used.
 
 #### **--config**
 Location of config file. Mainly for docker compatibility, only the authentication parts of the config are supported.
@@ -137,10 +142,10 @@ Name of the OCI runtime as specified in containers.conf or absolute path to the 
 
 #### **--runtime-flag**=*flag*
 
-Adds global flags for the container runtime. To list the supported flags, please
-consult the manpages of the selected container runtime (the default runtime is `crun`, the manpage to consult is `crun(8)`).
+Adds global flags for the container runtime. Can be specified multiple times.
+To list the supported flags, please consult the manpages of the selected container runtime (the default runtime is `crun`, the manpage to consult is `crun(8)`).
 
-Default runtime flags can be added in containers.conf.
+Default runtime flags can be set with the `engine.runtime_flags.<runtime>` settings in `containers.conf(5)`. Note that setting **--runtime-flag** causes any flags set in containers.conf to be ignored.
 
 Note: Do not pass the leading `--` to the flag. To pass the runc flag `--log-format json`
 to podman build, the option given can be `--runtime-flag log-format=json`.
@@ -180,7 +185,12 @@ Path to a PEM file containing the TLS client certificate to present to the serve
 
 #### **--tls-details**=*path*
 
-Path to a `containers-tls-details.yaml(5)` file, affecting TLS behavior throughout the program.
+Path to a `containers-tls-details.yaml(5)` file, affecting TLS behavior.
+
+This option affects Podman’s `login`, `logout`, `pull`, `push` and `run` operations when contacting a registry;
+for remote operation, the option must be set both on the client and the server.
+Effect on other operations is unspecified and may change over time.
+There is currently no plan to extend coverage further.
 
 If not set, defaults to a reasonable default that may change over time (depending on system’s global policy,
 version of the program, version of the Go language, and the like).

@@ -1254,36 +1254,41 @@ func (c *Container) exportCheckpoint(options ContainerCheckpointOptions) error {
 			volumeTarFilePath := filepath.Join(metadata.CheckpointVolumesDirectory, v.Name+".tar")
 			volumeTarFileFullPath := filepath.Join(c.bundlePath(), volumeTarFilePath)
 
-			volumeTarFile, err := os.Create(volumeTarFileFullPath)
-			if err != nil {
-				return fmt.Errorf("creating %q: %w", volumeTarFileFullPath, err)
-			}
+			// Defer on this function, not exportCheckpoint, so each volume
+			// file is closed before includeFiles is archived.
+			if err := func() error {
+				volumeTarFile, err := os.Create(volumeTarFileFullPath)
+				if err != nil {
+					return fmt.Errorf("creating %q: %w", volumeTarFileFullPath, err)
+				}
+				defer volumeTarFile.Close()
 
-			volume, err := c.runtime.GetVolume(v.Name)
-			if err != nil {
+				volume, err := c.runtime.GetVolume(v.Name)
+				if err != nil {
+					return err
+				}
+
+				mp, err := volume.MountPoint()
+				if err != nil {
+					return err
+				}
+				if mp == "" {
+					return fmt.Errorf("volume %s is not mounted, cannot export: %w", volume.Name(), define.ErrInternal)
+				}
+				input, err := chrootarchive.Tar(mp, &archive.TarOptions{
+					Compression:      archive.Uncompressed,
+					IncludeSourceDir: true,
+				}, mp)
+				if err != nil {
+					return fmt.Errorf("reading volume directory %q: %w", v.Dest, err)
+				}
+				defer input.Close()
+
+				_, err = io.Copy(volumeTarFile, input)
+				return err
+			}(); err != nil {
 				return err
 			}
-
-			mp, err := volume.MountPoint()
-			if err != nil {
-				return err
-			}
-			if mp == "" {
-				return fmt.Errorf("volume %s is not mounted, cannot export: %w", volume.Name(), define.ErrInternal)
-			}
-			input, err := chrootarchive.Tar(mp, &archive.TarOptions{
-				Compression:      archive.Uncompressed,
-				IncludeSourceDir: true,
-			}, mp)
-			if err != nil {
-				return fmt.Errorf("reading volume directory %q: %w", v.Dest, err)
-			}
-
-			_, err = io.Copy(volumeTarFile, input)
-			if err != nil {
-				return err
-			}
-			volumeTarFile.Close()
 
 			includeFiles = append(includeFiles, volumeTarFilePath)
 		}
@@ -1406,9 +1411,12 @@ func (c *Container) checkpoint(ctx context.Context, options ContainerCheckpointO
 		return nil, 0, err
 	}
 
-	// Setting CheckpointLog early in case there is a failure.
+	// Save checkpoint paths in case checkpointing fails.
 	c.state.CheckpointLog = path.Join(c.bundlePath(), "dump.log")
 	c.state.CheckpointPath = c.CheckpointPath()
+	if err := c.save(); err != nil {
+		return nil, 0, err
+	}
 
 	// Freeze a live checkpoint so its file system is captured at the same
 	// instant as the memory image; the deferred thaw runs once the checkpoint
@@ -1734,7 +1742,7 @@ func (c *Container) restore(ctx context.Context, options ContainerCheckpointOpti
 		}
 	}()
 
-	if err := c.prepare(); err != nil {
+	if err := c.prepare(ctx); err != nil {
 		return nil, 0, err
 	}
 

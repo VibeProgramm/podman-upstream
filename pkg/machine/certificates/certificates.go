@@ -12,6 +12,7 @@ import (
 	"go.podman.io/podman/v6/pkg/machine"
 	"go.podman.io/podman/v6/pkg/machine/define"
 	"go.podman.io/podman/v6/pkg/machine/vmconfigs"
+	"go.podman.io/storage/pkg/stringutils"
 )
 
 const (
@@ -112,8 +113,12 @@ func copyFileToGuestAnchorsFolder(mc *vmconfigs.MachineConfig, guestFilePath str
 		mc.SSH.IdentityPath,
 		mc.Name,
 		mc.SSH.Port,
-		[]string{"sudo", "cp", guestFilePath, GuestAnchorsPath},
+		[]string{guestCopyCommand(guestFilePath)},
 	)
+}
+
+func guestCopyCommand(guestFilePath string) string {
+	return stringutils.ShellQuoteArguments([]string{"sudo", "cp", guestFilePath, GuestAnchorsPath})
 }
 
 // saveCertificatesToPEM exports the certificates in certs to a PEM file

@@ -1918,6 +1918,13 @@ VOLUME %s`, ALPINE, volPath, volPath)
 		Expect(session.OutputToString()).To(ContainSubstring(limit))
 	})
 
+	It("podman run verify pids-limit 0 is unlimited", func() {
+		session := podmanTest.Podman([]string{"run", "--pids-limit", "0", "--net=none", "--rm", ALPINE, "cat", "/sys/fs/cgroup/pids.max"})
+		session.WaitWithDefaultTimeout()
+		Expect(session).Should(ExitCleanly())
+		Expect(session.OutputToString()).To(ContainSubstring("max"))
+	})
+
 	It("podman run umask", func() {
 		if !strings.Contains(podmanTest.OCIRuntime, "crun") {
 			Skip("Test only works on crun")

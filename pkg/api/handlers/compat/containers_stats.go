@@ -58,11 +58,28 @@ func StatsContainer(w http.ResponseWriter, r *http.Request) {
 	}
 	wroteContent := false
 
+	// https://github.com/containers/podman/issues/24730
+	// Docker populates precpu_stats even with stream=false, but not
+	// with one-shot=true (Docker API spec: PreCPU is blank for one-shot).
 	var preRead time.Time
 	var preCPUStats CPUStats
-	if query.Stream {
+	if !query.OneShot {
 		preRead = time.Now()
-		preCPUStats = getPreCPUStats(stats)
+		var err2 error
+		preCPUStats, err2 = getPreCPUStats(stats)
+		if err2 != nil {
+			utils.InternalServerError(w, err2)
+			return
+		}
+		// Brief pause so the second GetContainerStats call below
+		// produces a measurable CPU delta for stream=false callers.
+		// At ClkTck=100 this gives ~10 ticks per CPU core, enough for
+		// the Docker CPU% formula to return a directionally correct
+		// value. This only affects the compat per-container endpoint;
+		// podman-remote stats uses a separate libpod handler.
+		if !query.Stream {
+			time.Sleep(100 * time.Millisecond)
+		}
 	}
 
 streamLabel: // A label to flatten the scope
@@ -90,6 +107,12 @@ streamLabel: // A label to flatten the scope
 			return
 		}
 		s.Stats.PreRead = preRead
+
+		// one-shot=true: the two GetContainerStats calls are only
+		// milliseconds apart so cpu_stats.cpu is not meaningful (#29912).
+		if query.OneShot {
+			s.CPUStats.CPU = 0
+		}
 
 		var jsonOut any
 		if utils.IsLibpodRequest(r) {
@@ -126,15 +149,7 @@ streamLabel: // A label to flatten the scope
 		}
 
 		preRead = s.Read
-		bits, err := json.Marshal(s.CPUStats)
-		if err != nil {
-			logrus.Errorf("Unable to marshal cpu stats: %q", err)
-			return
-		}
-		if err := json.Unmarshal(bits, &preCPUStats); err != nil {
-			logrus.Errorf("Unable to unmarshal previous stats: %q", err)
-			return
-		}
+		preCPUStats = s.CPUStats
 		time.Sleep(defaultStatsPeriod)
 		goto streamLabel
 	}

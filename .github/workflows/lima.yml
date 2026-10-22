@@ -32,7 +32,7 @@ env:
   # CI automation repo release for the VM image downloads in ci.sh.
   # ENV is managed by renovate, do not change the name without
   # updating the renovate config in the automation repo.
-  AUTOMATION_RELEASE: 20260902t121119z
+  AUTOMATION_RELEASE: 20261022t094745z
   # Needed for logformatter
   PR_NUMBER: ${{ github.event.pull_request.number || '' }}
   PR_TITLE: ${{ github.event.pull_request.title || ''  }}
@@ -82,7 +82,7 @@ jobs:
 
       - name: Output failure log as GITHUB_STEP_SUMMARY
         if: failure()
-        run: hack/ci/github_log_summary.py hack/ci/logs/*.html > $GITHUB_STEP_SUMMARY || true
+        run: hack/ci/github_log_summary.py hack/ci/logs/*.html > "$GITHUB_STEP_SUMMARY" || true
 
       # TODO: figure out how to cache the binaries from the build job to the actual test tasks
       # - name: Upload binaries as artifact
@@ -95,7 +95,7 @@ jobs:
 
       - name: Upload journal as artifact
         if: always() # always collect the log
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a #v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: "${{ inputs.test }}-${{ inputs.mode }}-${{ inputs.priv }}-${{ inputs.distro }}.logs"
           path: "./hack/ci/logs/*"

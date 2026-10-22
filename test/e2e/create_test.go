@@ -18,6 +18,18 @@ import (
 )
 
 var _ = Describe("Podman create", func() {
+	It("podman create rootless cgroupfs unlimited pids-limit sets no limit", func() {
+		SkipIfRemote("--cgroup-manager is a server option")
+		SkipIfNotRootless("the pids limit is only omitted rootless")
+		podmanTest.CgroupManager = "cgroupfs"
+		for _, limit := range []string{"-1", "0"} {
+			session := podmanTest.PodmanExitCleanly("create", "--pids-limit", limit, ALPINE, "true")
+			ctr := session.OutputToString()
+			inspect := podmanTest.PodmanExitCleanly("inspect", "--format", "{{.HostConfig.PidsLimit}}", ctr)
+			Expect(inspect.OutputToString()).To(Equal("0"))
+		}
+	})
+
 	It("podman create container based on a local image", func() {
 		session := podmanTest.Podman([]string{"create", "--name", "local_image_test", ALPINE, "ls"})
 		session.WaitWithDefaultTimeout()

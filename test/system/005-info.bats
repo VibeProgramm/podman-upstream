@@ -113,6 +113,20 @@ store.imageStore.number   | 1
     fi
 }
 
+@test "podman info - confirm desired conmon" {
+    # Set by hack/ci/runner.sh on fedora-rawhide so we fail if Podman is not
+    # actually using conmon-v3 (containers.conf and/or CONMON_BINARY drift).
+    if [[ -z "$CI_DESIRED_CONMON" ]]; then
+        skip "CI_DESIRED_CONMON is unset--OK outside Rawhide CI"
+    fi
+
+    run_podman info --format '{{.Host.Conmon.Path}}'
+    is "$output" "$CI_DESIRED_CONMON" ".Host.Conmon.Path"
+
+    run_podman info --format '{{.Host.Conmon.Version}}'
+    assert "$output" =~ "version 3" ".Host.Conmon.Version is conmon v3 ($output)"
+}
+
 # 2021-04-06 discussed in watercooler: RHEL must never use crun, even if
 # using cgroups v2.
 @test "podman info - RHEL8 must use runc" {
@@ -269,6 +283,21 @@ EOF
 
     # Second run of Podman should still succeed after editing the graph driver.
     CONTAINERS_STORAGE_CONF=$PODMAN_TMPDIR/storage.conf run_podman $safe_opts info --format {{.Store.GraphDriverName}}
+}
+
+@test "podman info - report why the default OCI runtime failed to initialize" {
+    skip_if_remote "--tmpdir not supported via remote"
+
+    runtime=$(podman_runtime)
+    safe_opts=$(podman_isolation_opts ${PODMAN_TMPDIR})
+
+    # A regular file in place of the exits directory breaks the runtime
+    # initialization, even as root.
+    touch $PODMAN_TMPDIR/tmpdir/exits
+
+    run_podman 125 $safe_opts info
+    assert "$output" =~ "default OCI runtime \"$runtime\" failed to initialize: creating OCI runtime exit files directory: .*exits: not a directory" \
+           "error explains why the default OCI runtime failed"
 }
 
 # vim: filetype=sh

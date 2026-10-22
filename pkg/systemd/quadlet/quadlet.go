@@ -181,6 +181,7 @@ const (
 	KeySecurityLabelNested         = "SecurityLabelNested"
 	KeySecurityLabelType           = "SecurityLabelType"
 	KeyServiceName                 = "ServiceName"
+	KeySetMountsDependency         = "SetMountsDependency"
 	KeySetWorkingDirectory         = "SetWorkingDirectory"
 	KeyShmSize                     = "ShmSize"
 	KeySocketActivationPort        = "SocketActivationPort"
@@ -560,6 +561,7 @@ var (
 	// Supported keys in "Quadlet" group
 	supportedQuadletKeys = map[string]bool{
 		KeyDefaultDependencies: true,
+		KeySetMountsDependency: true,
 	}
 )
 
@@ -1740,7 +1742,9 @@ func ConvertVolume(volume *parser.UnitFile, unitsInfoMap map[string]*UnitInfo, i
 			if devValid {
 				podman.add("--opt", fmt.Sprintf("type=%s", devType))
 				if devType == "bind" {
-					service.AddEscaped(UnitGroup, "RequiresMountsFor", dev)
+					if err := addMountsDependency(volume, service, dev); err != nil {
+						return nil, warnings, err
+					}
 				}
 			} else {
 				return nil, warnings, errors.New("key Type can't be used without Device")
@@ -1772,7 +1776,7 @@ func ConvertVolume(volume *parser.UnitFile, unitsInfoMap map[string]*UnitInfo, i
 
 	service.AddCmdline(ServiceGroup, "ExecStart", podman.Args)
 
-	defaultOneshotServiceGroup(volume, service, true)
+	defaultOneshotServiceGroup(volume, service, false)
 
 	// Store the name of the created resource
 	unitInfo.ResourceName = volumeName
@@ -2533,7 +2537,9 @@ func handleStorageSource(quadletUnitFile, serviceUnitFile *parser.UnitFile, sour
 	}
 	if source[0] == '/' {
 		// Absolute path
-		serviceUnitFile.AddEscaped(UnitGroup, "RequiresMountsFor", source)
+		if err := addMountsDependency(quadletUnitFile, serviceUnitFile, source); err != nil {
+			return "", err
+		}
 	} else if strings.HasSuffix(source, ".volume") || (checkImage && strings.HasSuffix(source, ".image")) || strings.HasSuffix(source, ".artifact") {
 		sourceUnitInfo, ok := unitsInfoMap[source]
 		if !ok {
@@ -2549,6 +2555,37 @@ func handleStorageSource(quadletUnitFile, serviceUnitFile *parser.UnitFile, sour
 	}
 
 	return source, nil
+}
+
+// addMountsDependency configures the systemd mount dependency generated for a
+// user-specified mount source. The default keeps the historical Requires behavior.
+func addMountsDependency(quadletUnitFile, serviceUnitFile *parser.UnitFile, source string) error {
+	dependency, err := getMountsDependency(quadletUnitFile)
+	if err != nil {
+		return err
+	}
+	if dependency != "" {
+		serviceUnitFile.AddEscaped(UnitGroup, dependency+"MountsFor", source)
+	}
+	return nil
+}
+
+func getMountsDependency(quadletUnitFile *parser.UnitFile) (string, error) {
+	dependency, found := quadletUnitFile.Lookup(QuadletGroup, KeySetMountsDependency)
+	if !found {
+		return "Requires", nil
+	}
+
+	switch strings.ToLower(dependency) {
+	case "requires":
+		return "Requires", nil
+	case "wants":
+		return "Wants", nil
+	case "none":
+		return "", nil
+	default:
+		return "", fmt.Errorf("unsupported value for %s: %s", KeySetMountsDependency, dependency)
+	}
 }
 
 func handleHealth(unitFile *parser.UnitFile, groupName string, podman *PodmanCmdline) {
@@ -2951,6 +2988,9 @@ func initServiceUnitFile(quadletUnitFile *parser.UnitFile, isUser bool, unitsInf
 	}
 
 	if err := checkForUnknownKeys(quadletUnitFile, group, groupsInfo[group].SupportedKeys); err != nil {
+		return nil, nil, err
+	}
+	if _, err := getMountsDependency(quadletUnitFile); err != nil {
 		return nil, nil, err
 	}
 

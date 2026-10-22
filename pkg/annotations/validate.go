@@ -29,7 +29,7 @@ func regexErrorMsg(msg string, fmt string, examples ...string) string {
 const (
 	dns1123LabelFmt          string = "[a-z0-9]([-a-z0-9]*[a-z0-9])?"
 	dns1123SubdomainFmt      string = dns1123LabelFmt + "(\\." + dns1123LabelFmt + ")*"
-	dns1123SubdomainErrorMsg string = "annotations must be formatted as a valid lowercase RFC1123 subdomain of lower case alphanumeric characters, '-' or '.', and must start and end with an alphanumeric character"
+	dns1123SubdomainErrorMsg string = "must be formatted as a valid lowercase RFC1123 subdomain of lower case alphanumeric characters, '-' or '.', and must start and end with an alphanumeric character"
 )
 
 // DNS1123SubdomainMaxLength is a subdomain's max length in DNS (RFC 1123)
@@ -61,11 +61,11 @@ const (
 
 var qualifiedNameRegexp = regexp.Delayed("^" + qualifiedNameFmt + "$")
 
-// isQualifiedName tests whether the value passed is what Kubernetes calls a
-// "qualified name".  This is a format used in various places throughout the
-// system.  If the value is not valid, a list of error strings is returned.
-// Otherwise an empty list (or nil) is returned.
-func isQualifiedName(value string) error {
+// IsQualifiedName validates keys that follow Kubernetes qualified-name rules
+// (used by annotations AND labels): an optional DNS-1123 subdomain prefix and
+// '/', followed by a name of up to 63 characters. It returns an error if the
+// value does not conform.
+func IsQualifiedName(value string) error {
 	parts := strings.Split(value, "/")
 	var name string
 
@@ -117,7 +117,7 @@ func ValidateAnnotations(annotations map[string]string) error {
 	for k := range annotations {
 		// The rule is QualifiedName except that case doesn't matter,
 		// so convert to lowercase before checking.
-		if err := isQualifiedName(strings.ToLower(k)); err != nil {
+		if err := IsQualifiedName(strings.ToLower(k)); err != nil {
 			return err
 		}
 	}

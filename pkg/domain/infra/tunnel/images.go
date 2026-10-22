@@ -269,6 +269,7 @@ func (ir *ImageEngine) Import(_ context.Context, opts entities.ImageImportOption
 		if err != nil {
 			return nil, err
 		}
+		defer f.Close()
 	}
 	return images.Import(ir.ClientCtx, f, options)
 }
@@ -360,6 +361,7 @@ func (ir *ImageEngine) Save(_ context.Context, nameOrID string, tags []string, o
 	if err != nil {
 		return err
 	}
+	defer f.Close()
 	info, err := os.Stat(opts.Output)
 	switch {
 	case err == nil:
@@ -472,6 +474,12 @@ func (ir *ImageEngine) Scp(_ context.Context, src, dst string, opts entities.Ima
 	}
 	options.Quiet = &opts.Quiet
 	options.Destination = destination
+	// "none" is only spelled out for the CLI; leaving it off the request keeps a
+	// service that predates these options from rejecting it.
+	if utils.ScpCompressionRequested(opts.CompressionFormat) {
+		options.CompressionFormat = &opts.CompressionFormat
+	}
+	options.CompressionLevel = opts.CompressionLevel
 
 	rep, err := images.Scp(ir.ClientCtx, &src, destination, *options)
 	if err != nil {

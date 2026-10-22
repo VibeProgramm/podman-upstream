@@ -339,6 +339,29 @@ t GET    libpod/containers/${cid}/json 200 \
 
 t DELETE containers/$cid 204
 
+# Regression test for #27710. Docker clients send the seccomp profile JSON
+# itself in HostConfig.SecurityOpt (the docker CLI reads the file client-side
+# and inlines it). Pad with enough whitespace to exceed NAME_MAX so treating
+# the value as a path cannot accidentally succeed.
+SECCOMP_TMPD=$(mktemp -d podman-apiv2-test.seccomp.XXXXXXXX)
+seccomp_profile=$(printf '\n  {"defaultAction":"SCMP_ACT_ALLOW","syscalls":[{"names":["link","linkat"],"action":"SCMP_ACT_ERRNO"}]}%300s' '')
+jq -cn --arg image "$IMAGE" --arg profile "$seccomp_profile" \
+  '{Image:$image,
+    Cmd:["sh","-c","echo test > /tmp/link-src && ln /tmp/link-src /tmp/link-not-allowed"],
+    HostConfig:{SecurityOpt:["seccomp=" + $profile]}}' \
+  >$SECCOMP_TMPD/create.json
+t POST containers/create $SECCOMP_TMPD/create.json 201 \
+  .Id~[0-9a-f]\\{64\\}
+cid=$(jq -r '.Id' <<<"$output")
+# the inline profile must round-trip through inspect like docker does
+t GET containers/$cid/json 200 \
+  .HostConfig.SecurityOpt[0]~seccomp=.*SCMP_ACT_ERRNO.*
+t POST containers/$cid/start 204
+t POST containers/$cid/wait 200 \
+  .StatusCode=1
+t DELETE containers/$cid 204
+rm -rf $SECCOMP_TMPD
+
 # test only set the entrypoint, Cmd should be []
 t POST containers/create \
   Image=$IMAGE \
@@ -495,10 +518,32 @@ t GET containers/json?filters='garb1age}' 500 \
 t GET containers/json?filters='{"label":["testl' 500 \
     .cause="unexpected end of JSON input"
 
+# "dead" and "restarting" are documented Docker status values with no Podman
+# equivalent; the compat endpoint accepts them and they match no containers #28904
+podman run --name statusfilter-exited $IMAGE true
+t GET containers/json?filters='{"status":["dead"]}' 200 '[]'
+t GET containers/json?filters='{"status":["restarting"]}' 200 length=0
+t GET containers/json?filters='{"status":["dead","running"]}' 200 length=2
+t GET containers/json?filters='{"status":["dead","exited"]}' 200 \
+  length=1 \
+  .[0].Names[0]="/statusfilter-exited"
+t GET containers/json?filters='{"status":["dead"],"label":["slartibart=fast"]}' 200 length=0
+t GET containers/json?filters='{"status":["bogus"]}' 500 \
+    .cause="invalid argument"
+# other filters must still be validated when the status filter matches nothing
+t GET containers/json?filters='{"status":["dead"],"bogusfilter":["x"]}' 500 \
+    .cause="bogusfilter is an invalid filter"
+podman rm statusfilter-exited
 
 #libpod api list containers sanity checks
 t GET libpod/containers/json?filters='{"status":["removing"]}' 200 length=0
 t GET libpod/containers/json?filters='{"status":["bogus"]}' 500 \
+    .cause="invalid argument"
+# unlike the compat endpoint, the libpod endpoint does not accept Docker-only
+# status values
+t GET libpod/containers/json?filters='{"status":["dead"]}' 500 \
+    .cause="invalid argument"
+t GET libpod/containers/json?filters='{"status":["restarting"]}' 500 \
     .cause="invalid argument"
 t GET libpod/containers/json?filters='garb1age}' 500 \
     .cause="invalid character 'g' looking for beginning of value"
@@ -974,6 +1019,24 @@ t POST containers/$cid/update \
 
 t DELETE containers/$cid 204
 
+# 29790: compat update must not reset the restart policy when the body omits it
+t POST containers/create \
+  Image=$IMAGE           \
+  HostConfig='{"RestartPolicy":{"Name":"unless-stopped"}}' \
+  201                    \
+  .Id~[0-9a-f]\\{64\\}
+cid=$(jq -r '.Id' <<<"$output")
+
+t POST containers/$cid/update Memory=67108864 200
+t GET containers/$cid/json 200 \
+  .HostConfig.RestartPolicy.Name=unless-stopped
+
+t POST containers/$cid/update RestartPolicy='{"Name":"always"}' 200
+t GET containers/$cid/json 200 \
+  .HostConfig.RestartPolicy.Name=always
+
+t DELETE containers/$cid 204
+
 # Libpod API
 t POST libpod/containers/create \
   Image=$IMAGE           \
@@ -987,6 +1050,29 @@ t POST libpod/containers/$cid/update \
   201
 
 t DELETE containers/$cid 204
+
+# Verify that exec session with no attach streams specified can be started
+CTRNAME=exectest
+podman run -d --name $CTRNAME $IMAGE top
+echo '{ "Cmd":["sh", "-c", "echo hello > /tmp/testfile"]}' >${TMPD}/exec_empty.json
+t POST "containers/$CTRNAME/exec" ${TMPD}/exec_empty.json 201 .Id~[0-9a-f]\\{64\\}
+eid=$(jq -r '.Id' <<<"$output")
+t POST exec/$eid/start 200
+# Need to wait for the exec to actually run, given it's detached.
+# Use $PODMAN_BIN --root directly instead of the podman wrapper, since we
+# need to capture the command output.
+TRIES=5
+while [[ $TRIES -gt 0 ]]; do
+    exec_out=$($PODMAN_BIN --root $WORKDIR/server_root exec $CTRNAME ls /tmp/testfile 2>/dev/null)
+    if [[ "$exec_out" = "/tmp/testfile" ]]; then
+	break
+    fi
+    sleep 1
+    TRIES=$((TRIES - 1))
+done
+out=$($PODMAN_BIN --root $WORKDIR/server_root exec $CTRNAME cat /tmp/testfile 2>/dev/null)
+is "$out" "hello"
+podman rm -f $CTRNAME
 
 rm -rf $TMPD
 

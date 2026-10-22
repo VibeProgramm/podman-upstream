@@ -3,6 +3,7 @@
 package machine
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
@@ -35,13 +36,13 @@ func init() {
 	})
 }
 
-func remoteDirClient(_ *cobra.Command, args []string) error {
+func remoteDirClient(cmd *cobra.Command, args []string) error {
 	port, err := strconv.Atoi(args[0])
 	if err != nil {
 		return fmt.Errorf("error parsing port number: %w", err)
 	}
 
-	if err := client9p(uint32(port), args[1]); err != nil {
+	if err := client9p(cmd.Context(), uint32(port), args[1]); err != nil {
 		return err
 	}
 
@@ -50,7 +51,7 @@ func remoteDirClient(_ *cobra.Command, args []string) error {
 
 // This is Linux-only as we only intend for this function to be used inside the
 // `podman machine` VM, which is guaranteed to be Linux.
-func client9p(portNum uint32, mountPath string) error {
+func client9p(ctx context.Context, portNum uint32, mountPath string) error {
 	cleanPath, err := filepath.Abs(mountPath)
 	if err != nil {
 		return fmt.Errorf("absolute path for %s: %w", mountPath, err)
@@ -114,7 +115,7 @@ func client9p(portNum uint32, mountPath string) error {
 
 		// This is ugly, but it lets us use real kernel mount code,
 		// instead of maintaining our own FUSE 9p implementation.
-		cmd := exec.Command("mount", "-t", "9p", "-o", "trans=fd,rfdno=3,wfdno=3,version=9p2000.L", "9p", mountPath)
+		cmd := exec.CommandContext(ctx, "mount", "-t", "9p", "-o", "trans=fd,rfdno=3,wfdno=3,version=9p2000.L", "9p", mountPath)
 		cmd.ExtraFiles = []*os.File{vsock}
 
 		output, err := cmd.CombinedOutput()
