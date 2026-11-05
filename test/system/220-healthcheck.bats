@@ -542,4 +542,28 @@ stderr" "systemd-run error message"
     run_podman rm -f -t0 $ctr1 $ctr2
 }
 
+# https://github.com/podman-container-tools/podman/issues/29976
+@test "podman healthcheck - HEALTHCHECK NONE does not create systemd timer" {
+    local ctrname="c-h-none-$(safename)"
+    local imgname="localhost/hc-none-$(safename)"
+
+    cat > $PODMAN_TMPDIR/Containerfile <<_EOF
+FROM $IMAGE
+HEALTHCHECK NONE
+_EOF
+    run_podman build --format=docker -t $imgname -f $PODMAN_TMPDIR/Containerfile
+    run_podman run -d --name $ctrname --network=none $imgname /home/podman/pause
+    cid="$output"
+
+    run_podman inspect $ctrname --format '{{json .Config.Healthcheck.Test}}'
+    is "$output" '["NONE"]' "HEALTHCHECK NONE on container"
+
+    run -0 systemctl list-units --all --plain --no-legend
+    hc_units=$(grep "libpod-healthcheck-$cid" <<<"$output" || true)
+    assert "$hc_units" == "" "no systemd healthcheck timer while container is running (#29976)"
+
+    run_podman rm -f -t0 $ctrname
+    run_podman rmi -f $imgname
+}
+
 # vim: filetype=sh

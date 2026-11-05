@@ -1,6 +1,8 @@
 name: Assign Command
 
 on:
+  # Assigns only the commenter via API; does not checkout untrusted code.
+  # zizmor: ignore[dangerous-triggers]
   issue_comment:
     types: [created]
 

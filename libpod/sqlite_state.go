@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/hashicorp/go-multierror"
 	"github.com/sirupsen/logrus"
 	"go.podman.io/common/libnetwork/types"
 	"go.podman.io/common/pkg/config"
@@ -42,14 +43,20 @@ const (
 	sqliteOptionTXLock = "&_txlock=exclusive"
 	// Enforce case sensitivity for LIKE
 	sqliteOptionCaseSensitiveLike = "&_cslike=TRUE"
+	// Enable WAL (Write-Ahead Logging) mode to prevent freelist corruption under high concurrency
+	// and enable SQLite's broken-lock defenses (#29721).
+	// If WAL mode is not supported by the underlying filesystem (e.g. network filesystems
+	// lacking POSIX mmap), SQLite automatically falls back to standard journal mode.
+	sqliteOptionJournalMode = "&_journal_mode=WAL"
 
-	// Assembled sqlite options used when opening the database.
-	sqliteOptions = "?" +
+	// sqliteOptionsBase is the set of connection options that are always applied.
+	sqliteOptionsBase = "?" +
 		sqliteOptionLocation +
 		sqliteOptionSynchronous +
 		sqliteOptionForeignKeys +
 		sqliteOptionTXLock +
-		sqliteOptionCaseSensitiveLike
+		sqliteOptionCaseSensitiveLike +
+		sqliteOptionJournalMode
 )
 
 // NewSqliteState creates a new SQLite-backed state database.
@@ -58,11 +65,12 @@ func NewSqliteState(runtime *Runtime) (_ State, defErr error) {
 	state := new(SQLiteState)
 
 	dbPath := sqliteStatePath(runtime)
+	dbDir := filepath.Dir(dbPath)
 
 	// c/storage is set up *after* the DB - so even though we use the c/s
 	// root (or, for transient, runroot) dir, we need to make the dir
 	// ourselves.
-	if err := os.MkdirAll(filepath.Dir(dbPath), 0o700); err != nil {
+	if err := os.MkdirAll(dbDir, 0o700); err != nil {
 		return nil, fmt.Errorf("creating root directory: %w", err)
 	}
 
@@ -77,7 +85,9 @@ func NewSqliteState(runtime *Runtime) (_ State, defErr error) {
 	}
 	sqliteOptionBusyTimeout := "&_busy_timeout=" + busyTimeout
 
-	conn, err := sql.Open("sqlite3", dbPath+sqliteOptions+sqliteOptionBusyTimeout)
+	dsn := dbPath + sqliteOptionsBase + sqliteOptionBusyTimeout
+
+	conn, err := sql.Open("sqlite3", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("initializing sqlite database: %w", err)
 	}
@@ -300,7 +310,10 @@ func (s *SQLiteState) GetDBConfig() (*DBConfig, error) {
 	return cfg, nil
 }
 
-// ValidateDBConfig validates paths in the given runtime against the database
+// ValidateDBConfig validates paths in the given runtime against the database.
+// If no containers/pods/volumes are present, overwrite the current cached
+// paths. If containers/pods/volumes are present, check for consistency and
+// error if any cached path disagrees.
 func (s *SQLiteState) ValidateDBConfig(_ *Runtime) (defErr error) {
 	if !s.valid {
 		return define.ErrDBClosed
@@ -319,6 +332,26 @@ func (s *SQLiteState) ValidateDBConfig(_ *Runtime) (defErr error) {
                 ?, ?, ?,
                 ?, ?, ?
         );`
+	// Overwrites the single DBConfig row with the current runtime paths.
+	// Only used when the database holds no containers, pods, or volumes, so
+	// that changing storage paths does not leave a stale configuration behind.
+	const updateRow = `
+        UPDATE DBConfig SET
+                SchemaVersion = ?,
+                Os = ?,
+                StaticDir = ?,
+                TmpDir = ?,
+                GraphRoot = ?,
+                RunRoot = ?,
+                GraphDriver = ?,
+                VolumeDir = ?
+        WHERE ID = 1;`
+	// Check if we have no pods, containers, and volumes in the DB in a
+	// single query.
+	const checkDBEmpty = `
+        SELECT 'c' AS not_empty FROM ContainerConfig UNION
+        SELECT 'p' AS not_empty FROM PodConfig       UNION
+        SELECT 'v' AS not_empty FROM VolumeConfig    LIMIT 1;`
 
 	var (
 		dbOS, staticDir, tmpDir, graphRoot, runRoot, graphDriver, volumePath string
@@ -437,35 +470,54 @@ func (s *SQLiteState) ValidateDBConfig(_ *Runtime) (defErr error) {
 		return nil
 	}
 
-	if err := checkField("os", dbOS, runtimeOS, false); err != nil {
-		return err
-	}
-	if err := checkField("static dir", staticDir, runtimeStaticDir, true); err != nil {
-		return err
-	}
-	if err := checkField("tmp dir", tmpDir, runtimeTmpDir, true); err != nil {
-		return err
-	}
-	if err := checkField("graph root", graphRoot, runtimeGraphRoot, true); err != nil {
-		return err
-	}
-	if err := checkField("run root", runRoot, runtimeRunRoot, true); err != nil {
-		return err
-	}
-	if err := checkField("graph driver", graphDriver, runtimeGraphDriver, false); err != nil {
-		return err
-	}
-	if err := checkField("volume path", volumePath, runtimeVolumePath, true); err != nil {
-		return err
+	var cfgErr error
+	for _, field := range []struct {
+		name   string
+		dbVal  string
+		ourVal string
+		isPath bool
+	}{
+		{"os", dbOS, runtimeOS, false},
+		{"static dir", staticDir, runtimeStaticDir, true},
+		{"tmp dir", tmpDir, runtimeTmpDir, true},
+		{"graph root", graphRoot, runtimeGraphRoot, true},
+		{"run root", runRoot, runtimeRunRoot, true},
+		{"graph driver", graphDriver, runtimeGraphDriver, false},
+		{"volume path", volumePath, runtimeVolumePath, true},
+	} {
+		if err := checkField(field.name, field.dbVal, field.ourVal, field.isPath); err != nil {
+			cfgErr = multierror.Append(cfgErr, err)
+		}
 	}
 
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("committing database validation row: %w", err)
+	if cfgErr == nil {
+		// All is well, return early
+		if err := tx.Commit(); err != nil {
+			return fmt.Errorf("committing database validation row: %w", err)
+		}
+		return nil
 	}
-	// Do not return any error after the commit call because the defer will
-	// try to roll back the transaction which results in an logged error.
 
-	return nil
+	var check string
+	// Query returns a string if a container/pod/volume exists, nothing otherwise.
+	if err := tx.QueryRow(checkDBEmpty).Scan(&check); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			// Safe to rewrite, update the row
+			if _, err := tx.Exec(updateRow, schemaVersion, runtimeOS,
+				runtimeStaticDir, runtimeTmpDir, runtimeGraphRoot,
+				runtimeRunRoot, runtimeGraphDriver, runtimeVolumePath); err != nil {
+				return fmt.Errorf("overwriting database config row: %w", err)
+			}
+
+			if err := tx.Commit(); err != nil {
+				return fmt.Errorf("committing overwrite of database config row: %w", err)
+			}
+			return nil
+		}
+		return fmt.Errorf("checking if database is empty: %w", err)
+	}
+
+	return cfgErr
 }
 
 // GetContainerName returns the name of the container associated with a given

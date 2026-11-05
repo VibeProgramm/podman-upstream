@@ -216,6 +216,20 @@ var _ = Describe("Podman secret", func() {
 		Expect(list.OutputToStringArray()).To(HaveLen(2))
 	})
 
+	It("podman secret ls with invalid filter", func() {
+		secretFilePath := filepath.Join(podmanTest.TempDir, "secret")
+		err := os.WriteFile(secretFilePath, []byte("mysecret"), 0o755)
+		Expect(err).ToNot(HaveOccurred())
+
+		session := podmanTest.Podman([]string{"secret", "create", "a", secretFilePath})
+		session.WaitWithDefaultTimeout()
+		Expect(session).Should(ExitCleanly())
+
+		list := podmanTest.Podman([]string{"secret", "ls", "--filter", "invalid=blabla"})
+		list.WaitWithDefaultTimeout()
+		Expect(list).Should(ExitWithError(125, `Error: invalid filter "invalid"`))
+	})
+
 	It("podman secret ls --quiet", func() {
 		secretFilePath := filepath.Join(podmanTest.TempDir, "secret")
 		err := os.WriteFile(secretFilePath, []byte("mysecret"), 0o755)

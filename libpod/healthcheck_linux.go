@@ -166,9 +166,11 @@ func (c *Container) disableHealthCheckSystemd(isStartup bool) bool {
 		return true
 	}
 	if isStartup {
-		if c.config.StartupHealthCheckConfig.Interval == 0 {
-			return true
-		}
+		// Same Test / NONE rules as HasHealthCheck(), for StartupHealthCheckConfig.
+		return !c.hasStartupHealthCheck()
+	}
+	if !c.HasHealthCheck() {
+		return true
 	}
 	if c.config.HealthCheckConfig.Interval == 0 {
 		return true

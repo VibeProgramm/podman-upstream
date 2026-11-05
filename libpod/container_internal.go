@@ -15,7 +15,6 @@ import (
 	"slices"
 	"strconv"
 	"strings"
-	"sync"
 	"syscall"
 	"time"
 
@@ -285,7 +284,7 @@ func (c *Container) handleRestartPolicy(ctx context.Context) (_ bool, retErr err
 
 	if c.config.HealthCheckConfig != nil {
 		if err := c.removeTransientFiles(ctx,
-			c.config.StartupHealthCheckConfig != nil && !c.state.StartupHCPassed,
+			c.startupHealthCheckActive(),
 			c.state.HCUnitName); err != nil {
 			return false, err
 		}
@@ -1126,12 +1125,13 @@ func (c *Container) init(ctx context.Context, retainRetries bool) error {
 		return err
 	}
 
-	if c.config.HealthCheckConfig != nil {
+	isStartupHC := c.startupHealthCheckActive()
+	if c.HasHealthCheck() || isStartupHC {
 		timer := c.config.HealthCheckConfig.Interval.String()
-		if c.config.StartupHealthCheckConfig != nil {
+		if isStartupHC {
 			timer = c.config.StartupHealthCheckConfig.Interval.String()
 		}
-		if err := c.createTimer(timer, c.config.StartupHealthCheckConfig != nil); err != nil {
+		if err := c.createTimer(timer, isStartupHC); err != nil {
 			return fmt.Errorf("create healthcheck: %w", err)
 		}
 	}
@@ -1259,7 +1259,8 @@ func (c *Container) initAndStart(ctx context.Context) (retErr error) {
 // Internal function to start a container without taking the pod lock.
 // Please note that this DOES take the container lock.
 // Intended to be used in pod-related functions.
-func (c *Container) startNoPodLock(ctx context.Context, recursive bool) (finalErr error) {
+// The returned PID has the same meaning as for Start.
+func (c *Container) startNoPodLock(ctx context.Context, recursive bool) (_ int, finalErr error) {
 	if !c.batched {
 		c.lock.Lock()
 		defer c.lock.Unlock()
@@ -1275,19 +1276,27 @@ func (c *Container) startNoPodLock(ctx context.Context, recursive bool) (finalEr
 		}()
 
 		if err := c.syncContainer(); err != nil {
-			return err
+			return 0, err
 		}
 	}
 
 	if err := c.prepareToStart(ctx, recursive); err != nil {
-		return err
+		if errors.Is(err, define.ErrCtrStateRunning) {
+			return c.state.PID, err
+		}
+		return 0, err
 	}
 
 	// Start the container
 	if err := c.start(); err != nil {
-		return err
+		return 0, err
 	}
-	return c.waitForHealthy(ctx)
+	// waitForHealthy can release the lock, so read the PID before calling it.
+	pid := c.state.PID
+	if err := c.waitForHealthy(ctx); err != nil {
+		return 0, err
+	}
+	return pid, nil
 }
 
 // Internal, non-locking function to start a container
@@ -1311,7 +1320,7 @@ func (c *Container) start() error {
 			payload += "\n"
 			payload += daemon.SdNotifyReady
 		}
-		if err := notifyproxy.SendMessage(c.config.SdNotifySocket, payload); err != nil {
+		if err := notifyproxy.SendMessageWithBarrier(c.config.SdNotifySocket, payload); err != nil {
 			logrus.Errorf("Notifying systemd of Conmon PID: %s", err.Error())
 		} else {
 			logrus.Debugf("Notify sent successfully")
@@ -1400,14 +1409,14 @@ func (c *Container) waitForHealthy(ctx context.Context) error {
 		}()
 	}
 
-	if _, err := c.WaitForConditionWithInterval(ctx, DefaultWaitInterval, define.HealthCheckHealthy); err != nil {
+	if _, err := c.WaitForConditionWithInterval(ctx, nil, DefaultWaitInterval, define.HealthCheckHealthy); err != nil {
 		if errors.Is(err, define.ErrNoSuchCtr) {
 			return nil
 		}
 		return err
 	}
 
-	if err := notifyproxy.SendMessage(c.config.SdNotifySocket, daemon.SdNotifyReady); err != nil {
+	if err := notifyproxy.SendMessageWithBarrier(c.config.SdNotifySocket, daemon.SdNotifyReady); err != nil {
 		logrus.Errorf("Sending READY message after turning healthy: %s", err.Error())
 	} else {
 		logrus.Debugf("Notify sent successfully")
@@ -1617,7 +1626,7 @@ func (c *Container) pause() error {
 
 	if c.state.HCUnitName != "" {
 		if err := c.removeTransientFiles(context.Background(),
-			c.config.StartupHealthCheckConfig != nil && !c.state.StartupHCPassed,
+			c.startupHealthCheckActive(),
 			c.state.HCUnitName); err != nil {
 			return fmt.Errorf("failed to remove HealthCheck timer: %w", err)
 		}
@@ -1647,9 +1656,8 @@ func (c *Container) unpause() error {
 		return err
 	}
 
-	isStartupHealthCheck := c.config.StartupHealthCheckConfig != nil && !c.state.StartupHCPassed
-	isHealthCheckEnabled := c.config.HealthCheckConfig != nil &&
-		(len(c.config.HealthCheckConfig.Test) != 1 || c.config.HealthCheckConfig.Test[0] != "NONE")
+	isStartupHealthCheck := c.startupHealthCheckActive()
+	isHealthCheckEnabled := c.HasHealthCheck()
 	if isHealthCheckEnabled || isStartupHealthCheck {
 		timer := c.config.HealthCheckConfig.Interval.String()
 		if isStartupHealthCheck {
@@ -1700,7 +1708,7 @@ func (c *Container) restartWithTimeout(ctx context.Context, timeout uint) (retEr
 
 		if c.config.HealthCheckConfig != nil {
 			if err := c.removeTransientFiles(context.Background(),
-				c.config.StartupHealthCheckConfig != nil && !c.state.StartupHCPassed,
+				c.startupHealthCheckActive(),
 				c.state.HCUnitName); err != nil {
 				logrus.Error(err.Error())
 			}
@@ -2236,7 +2244,7 @@ func (c *Container) cleanup(ctx context.Context) error {
 	// Remove healthcheck unit/timer file if it execs
 	if c.config.HealthCheckConfig != nil {
 		if err := c.removeTransientFiles(ctx,
-			c.config.StartupHealthCheckConfig != nil && !c.state.StartupHCPassed,
+			c.startupHealthCheckActive(),
 			c.state.HCUnitName); err != nil {
 			logrus.Errorf("Removing timer for container %s healthcheck: %v", c.ID(), err)
 		}
@@ -2569,12 +2577,6 @@ func (c *Container) getRootPathForOCI() (string, error) {
 	return c.getIntermediateMountpointUser()
 }
 
-var (
-	intermediateMountPoint     string
-	intermediateMountPointErr  error
-	intermediateMountPointSync sync.Mutex
-)
-
 // getIntermediateMountpointUser returns a path that is accessible to everyone.  It must be on TMPDIR since
 // the runroot/tmpdir used by libpod are accessible only to the owner.
 // To avoid TOCTOU issues, the path must be owned by the current user's UID and GID.
@@ -2610,21 +2612,17 @@ func (c *Container) recreateIntermediateMountpointUser() (string, error) {
 // To avoid TOCTOU issues, the path must be owned by the current user's UID and GID.
 // The path can be used by different containers, so a mount must be created only in a private mount namespace.
 func (c *Container) getIntermediateMountpointUser() (string, error) {
-	intermediateMountPointSync.Lock()
-	defer intermediateMountPointSync.Unlock()
-
-	if intermediateMountPoint == "" || fileutils.Exists(intermediateMountPoint) != nil {
-		return c.recreateIntermediateMountpointUser()
+	intermediateMountPoint, err := c.recreateIntermediateMountpointUser()
+	if err != nil {
+		return "", err
 	}
 
 	// update the timestamp to prevent systemd-tmpfiles from removing it
 	now := time.Now()
 	if err := os.Chtimes(intermediateMountPoint, now, now); err != nil {
-		if !errors.Is(err, os.ErrNotExist) {
-			return c.recreateIntermediateMountpointUser()
-		}
+		return "", err
 	}
-	return intermediateMountPoint, intermediateMountPointErr
+	return intermediateMountPoint, nil
 }
 
 // mount mounts the container's root filesystem
@@ -2845,15 +2843,14 @@ func (c *Container) update(updateOptions *entities.ContainerUpdateOptions) error
 		return fmt.Errorf("must provide restart policy if updating restart retries: %w", define.ErrInvalidArg)
 	}
 
-	oldResources := new(spec.LinuxResources)
-	if c.config.Spec.Linux.Resources != nil {
-		if err := JSONDeepCopy(c.config.Spec.Linux.Resources, oldResources); err != nil {
-			return err
-		}
+	oldConfig := new(ContainerConfig)
+	if err := JSONDeepCopy(c.config, oldConfig); err != nil {
+		return err
 	}
-	oldRestart := c.config.RestartPolicy
-	oldRetries := c.config.RestartRetries
-	oldRlimits := c.config.Spec.Process.Rlimits
+	oldConfig.rewrite = c.config.rewrite
+	revertConfig := func() {
+		c.config = oldConfig
+	}
 
 	if updateOptions.RestartPolicy != nil {
 		if err := define.ValidateRestartPolicy(*updateOptions.RestartPolicy); err != nil {
@@ -2886,6 +2883,16 @@ func (c *Container) update(updateOptions *entities.ContainerUpdateOptions) error
 		if err := json.Unmarshal(resourcesToUpdate, c.config.Spec.Linux.Resources); err != nil {
 			return err
 		}
+		// Lifting a pids limit the container does not have changes nothing.
+		var oldPids *spec.LinuxPids
+		if oldConfig.Spec.Linux != nil && oldConfig.Spec.Linux.Resources != nil {
+			oldPids = oldConfig.Spec.Linux.Resources.Pids
+		}
+		if pids := c.config.Spec.Linux.Resources.Pids; pids != nil &&
+			(oldPids == nil || util.PidsLimitUnlimited(oldPids.Limit)) &&
+			util.SkipUnlimitedPids(pids.Limit, c.CgroupManager()) {
+			c.config.Spec.Linux.Resources.Pids = nil
+		}
 		updateOptions.Resources = c.config.Spec.Linux.Resources
 	}
 
@@ -2907,11 +2914,16 @@ func (c *Container) update(updateOptions *entities.ContainerUpdateOptions) error
 
 	if err := c.runtime.state.RewriteContainerConfig(c, c.config); err != nil {
 		// Assume DB write failed, revert to old resources block
-		c.config.Spec.Linux.Resources = oldResources
-		c.config.RestartPolicy = oldRestart
-		c.config.RestartRetries = oldRetries
-		c.config.Spec.Process.Rlimits = oldRlimits
+		revertConfig()
 		return err
+	}
+	// From here on the new config is in the database, so a failure must
+	// write the old one back, or the next start applies what failed.
+	rollbackConfig := func() {
+		revertConfig()
+		if err := c.runtime.state.RewriteContainerConfig(c, c.config); err != nil {
+			logrus.Errorf("Reverting container %s config after failed update: %v", c.ID(), err)
+		}
 	}
 
 	if c.ensureState(define.ContainerStateCreated, define.ContainerStateRunning, define.ContainerStatePaused) &&
@@ -2920,7 +2932,13 @@ func (c *Container) update(updateOptions *entities.ContainerUpdateOptions) error
 		// To keep inspect accurate we need to update the on-disk OCI spec.
 		onDiskSpec, err := c.specFromState()
 		if err != nil {
+			rollbackConfig()
 			return fmt.Errorf("retrieving on-disk OCI spec to update: %w", err)
+		}
+		oldOnDiskSpec := new(spec.Spec)
+		if err := JSONDeepCopy(onDiskSpec, oldOnDiskSpec); err != nil {
+			rollbackConfig()
+			return err
 		}
 		if updateOptions.Resources != nil {
 			if onDiskSpec.Linux == nil {
@@ -2939,6 +2957,12 @@ func (c *Container) update(updateOptions *entities.ContainerUpdateOptions) error
 		}
 
 		if err := c.ociRuntime.UpdateContainer(c, updateOptions.Resources); err != nil {
+			// The runtime rejected the update, so do not keep it in the
+			// config either, or the next start fails the same way.
+			rollbackConfig()
+			if rerr := c.saveSpec(oldOnDiskSpec); rerr != nil {
+				logrus.Errorf("Reverting container %s OCI spec after failed update: %v", c.ID(), rerr)
+			}
 			return err
 		}
 	}
@@ -2953,7 +2977,7 @@ func (c *Container) resetHealthCheckTimers(noHealthCheck bool, changedTimer bool
 	}
 	if noHealthCheck {
 		if err := c.removeTransientFiles(context.Background(),
-			c.config.StartupHealthCheckConfig != nil && !c.state.StartupHCPassed,
+			c.startupHealthCheckActive(),
 			c.state.HCUnitName); err != nil {
 			return err
 		}
@@ -3016,7 +3040,7 @@ func (c *Container) updateHealthCheck(newHealthCheckConfig IHealthCheckConfig, c
 		changedTimer = newHealthCheckConfig.IsTimeChanged(oldInterval)
 	}
 
-	noHealthCheck := c.config.HealthCheckConfig != nil && slices.Contains(c.config.HealthCheckConfig.Test, "NONE")
+	noHealthCheck := !c.HasHealthCheck()
 
 	if err := c.resetHealthCheckTimers(noHealthCheck, changedTimer, !oldHealthCheckConfig.IsNil(), newHealthCheckConfig.IsStartup()); err != nil {
 		return err

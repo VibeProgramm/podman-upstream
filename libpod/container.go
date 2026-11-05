@@ -125,6 +125,14 @@ type Container struct {
 	restoreFromCheckpoint bool
 
 	pastaResult *pasta.SetupResult
+
+	// rootlessPortPid is the pid of the rootlessport process started for
+	// this container, 0 when there is none or it is unknown.
+	rootlessPortPid int
+
+	// conmonCgroupCreated is set once this process created the conmon
+	// cgroup, so that processes started afterwards can be added to it.
+	conmonCgroupCreated bool
 }
 
 // ContainerState contains the current state of the container
@@ -672,6 +680,16 @@ func (c *Container) LogSizeMax() int64 {
 // LogLabels returns the labels added to the container's log file
 func (c *Container) LogLabels() map[string]string {
 	return c.config.LogLabels
+}
+
+// LogRotate returns whether log rotation is enabled for the container's log file.
+func (c *Container) LogRotate() bool {
+	return c.config.LogRotate
+}
+
+// LogMaxFiles returns the maximum number of rotated log files kept for the container.
+func (c *Container) LogMaxFiles() uint {
+	return c.config.LogMaxFiles
 }
 
 // RestartPolicy returns the container's restart policy.
@@ -1324,16 +1342,9 @@ func (c *Container) HostNetwork() bool {
 	return true
 }
 
-// HasHealthCheck returns bool as to whether there is a health check
-// defined for the container
-func (c *Container) HasHealthCheck() bool {
-	// Consider a healthcheck present only when a HealthCheckConfig exists
-	// and the Test field contains a meaningful command. Treat an empty
-	// Test slice or the special ["NONE"] sentinel as "no healthcheck".
-	if c.config.HealthCheckConfig == nil {
-		return false
-	}
-	test := c.config.HealthCheckConfig.Test
+// healthCheckTestHasCommand reports whether a health check Test slice defines a
+// runnable command. Empty Test and the ["NONE"] sentinel mean disabled.
+func healthCheckTestHasCommand(test []string) bool {
 	if len(test) == 0 {
 		return false
 	}
@@ -1341,6 +1352,29 @@ func (c *Container) HasHealthCheck() bool {
 		return false
 	}
 	return true
+}
+
+// HasHealthCheck returns bool as to whether there is a health check
+// defined for the container
+func (c *Container) HasHealthCheck() bool {
+	if c.config.HealthCheckConfig == nil {
+		return false
+	}
+	return healthCheckTestHasCommand(c.config.HealthCheckConfig.Test)
+}
+
+// hasStartupHealthCheck reports whether the container has an active startup
+// health check configuration (non-zero interval and a runnable Test command).
+func (c *Container) hasStartupHealthCheck() bool {
+	sc := c.config.StartupHealthCheckConfig
+	if sc == nil || sc.Interval == 0 {
+		return false
+	}
+	return healthCheckTestHasCommand(sc.Test)
+}
+
+func (c *Container) startupHealthCheckActive() bool {
+	return !c.state.StartupHCPassed && c.hasStartupHealthCheck()
 }
 
 // HealthCheckConfig returns the command and timing attributes of the health check

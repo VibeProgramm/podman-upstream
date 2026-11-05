@@ -883,8 +883,20 @@ func (r *ConmonOCIRuntime) PersistDirectoryPath(ctr *Container) (string, error) 
 
 // RuntimeInfo provides information on the runtime.
 func (r *ConmonOCIRuntime) RuntimeInfo() (*define.ConmonInfo, *define.OCIRuntimeInfo, error) {
-	runtimePackage := version.Package(r.path)
-	conmonPackage := version.Package(r.conmonPath)
+	return r.runtimeInfo(true)
+}
+
+// RuntimeVersionInfo provides version metadata for compat GET /version.
+func (r *ConmonOCIRuntime) RuntimeVersionInfo() (*define.ConmonInfo, *define.OCIRuntimeInfo, error) {
+	return r.runtimeInfo(false)
+}
+
+func (r *ConmonOCIRuntime) runtimeInfo(includePackage bool) (*define.ConmonInfo, *define.OCIRuntimeInfo, error) {
+	var runtimePackage, conmonPackage string
+	if includePackage {
+		runtimePackage = version.Package(r.path)
+		conmonPackage = version.Package(r.conmonPath)
+	}
 	runtimeVersion, err := r.getOCIRuntimeVersion()
 	if err != nil {
 		return nil, nil, fmt.Errorf("getting version of OCI runtime %s: %w", r.name, err)
@@ -899,14 +911,16 @@ func (r *ConmonOCIRuntime) RuntimeInfo() (*define.ConmonInfo, *define.OCIRuntime
 		Path:    r.conmonPath,
 		Version: conmonVersion,
 	}
-	ocirt := define.OCIRuntimeInfo{
-		Name:     r.name,
-		Path:     r.path,
-		Package:  runtimePackage,
-		Version:  runtimeVersion,
-		Features: r.featuresProvider(),
+	oci := define.OCIRuntimeInfo{
+		Name:    r.name,
+		Path:    r.path,
+		Package: runtimePackage,
+		Version: runtimeVersion,
 	}
-	return &conmon, &ocirt, nil
+	if includePackage {
+		oci.Features = r.featuresProvider()
+	}
+	return &conmon, &oci, nil
 }
 
 // Wait for a container which has been sent a signal to stop
@@ -1296,6 +1310,13 @@ func (r *ConmonOCIRuntime) configureConmonEnv() ([]string, error) {
 			// The NOTIFY_SOCKET must not leak into the environment.
 			continue
 		}
+		if strings.HasPrefix(v, "LISTEN_FDS=") || strings.HasPrefix(v, "LISTEN_PID=") || strings.HasPrefix(v, "LISTEN_FDNAMES=") {
+			// The LISTEN_* fds are already passed via --preserve-fds,
+			// and the variables are set in the container spec.
+			// The OCI runtime must not see them, as it would count
+			// the fds once again and leak conmon's fds into the container.
+			continue
+		}
 		if strings.HasPrefix(v, "DBUS_SESSION_BUS_ADDRESS=") && !rootless.IsRootless() {
 			// The DBUS_SESSION_BUS_ADDRESS must not leak into the environment when running as root.
 			// This is because we want to use the system session for root containers, not the user session.
@@ -1389,6 +1410,16 @@ func (r *ConmonOCIRuntime) sharedConmonArgs(ctr *Container, cuuid, bundlePath, p
 		args = append(args, "--log-size-max", strconv.FormatInt(size, 10))
 	}
 
+	// Log rotation options: --log-rotate enables rotation; --log-max-files
+	// sets the number of backup files to keep.
+	// If max-file is not specified, conmon keeps 1 backup file by default when --log-rotate is passed.
+	if ctr.LogRotate() {
+		args = append(args, "--log-rotate")
+	}
+	if logMaxFiles := ctr.LogMaxFiles(); logMaxFiles > 0 {
+		args = append(args, "--log-max-files", strconv.FormatUint(uint64(logMaxFiles), 10))
+	}
+
 	if ociLogPath != "" {
 		args = append(args, "--runtime-arg", "--log-format=json", "--runtime-arg", "--log", fmt.Sprintf("--runtime-arg=%s", ociLogPath))
 	}
@@ -1478,9 +1509,10 @@ func readConmonPipeData(runtimeName string, pipe *os.File, ociLog string) (int, 
 			if ociLog != "" {
 				ociLogData, err := os.ReadFile(ociLog)
 				if err == nil {
-					var ociErr ociError
-					if err := json.Unmarshal(ociLogData, &ociErr); err == nil {
-						return -1, getOCIRuntimeError(runtimeName, ociErr.Msg)
+					// Forward the error(s) the OCI runtime logged, which may be
+					// a single JSON object or several (e.g. a failed CRIU restore).
+					if errs, err := parseOCIErrors(ociLogData); err == nil && len(errs) > 0 {
+						return -1, getOCIRuntimeErrorMultiline(runtimeName, errs)
 					}
 				}
 			}
@@ -1491,9 +1523,10 @@ func readConmonPipeData(runtimeName string, pipe *os.File, ociLog string) (int, 
 			if ociLog != "" {
 				ociLogData, err := os.ReadFile(ociLog)
 				if err == nil {
-					var ociErr ociError
-					if err := json.Unmarshal(ociLogData, &ociErr); err == nil {
-						return ss.si.Data, getOCIRuntimeError(runtimeName, ociErr.Msg)
+					// Forward the error(s) the OCI runtime logged, which may be
+					// a single JSON object or several (e.g. a failed CRIU restore).
+					if errs, err := parseOCIErrors(ociLogData); err == nil && len(errs) > 0 {
+						return ss.si.Data, getOCIRuntimeErrorMultiline(runtimeName, errs)
 					}
 				}
 			}

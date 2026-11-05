@@ -31,17 +31,21 @@ type State interface { //nolint:interfacebloat
 	// GetDBConfig retrieves several paths configured within the database
 	// when it was created - namely, Libpod root and tmp dirs, c/storage
 	// root and tmp dirs, and c/storage graph driver.
-	// This is not implemented by the in-memory state, as it has no need to
-	// validate runtime configuration.
 	GetDBConfig() (*DBConfig, error)
 
 	// ValidateDBConfig validates the config in the given Runtime struct
 	// against paths stored in the configured database.
-	// Libpod root and tmp dirs and c/storage root and tmp dirs and graph
-	// driver are validated.
-	// This is not implemented by the in-memory state, as it has no need to
-	// validate runtime configuration that may change over multiple runs of
-	// the program.
+	// The following should be validated:
+	// - staticdir
+	// - tmpdir
+	// - graphroot
+	// - runroot
+	// - graphdriver
+	// - volumedir
+	// If containers/pods/volumes are present, any mismatch must return an
+	// error.
+	// If no containers/pods/volumes are present, on mismatch, replace the
+	// database value with the value in the Runtime.
 	ValidateDBConfig(runtime *Runtime) error
 
 	// Resolve an ID to a Container Name.

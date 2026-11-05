@@ -1,6 +1,9 @@
 name: Cherry Pick to Release Branch
 
 on:
+  # Default-branch workflow only; no PR-head checkout from the comment.
+  # Write/admin is required before git push; SHAs come from the GitHub API.
+  # zizmor: ignore[dangerous-triggers]
   issue_comment:
     types: [created]
   pull_request:

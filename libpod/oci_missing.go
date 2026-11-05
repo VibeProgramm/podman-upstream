@@ -233,6 +233,11 @@ func (r *MissingRuntime) PersistDirectoryPath(ctr *Container) (string, error) {
 	return filepath.Join(r.persistDir, ctr.ID()), nil
 }
 
+// RuntimeVersionInfo returns information on the missing runtime.
+func (r *MissingRuntime) RuntimeVersionInfo() (*define.ConmonInfo, *define.OCIRuntimeInfo, error) {
+	return r.RuntimeInfo()
+}
+
 // RuntimeInfo returns information on the missing runtime
 func (r *MissingRuntime) RuntimeInfo() (*define.ConmonInfo, *define.OCIRuntimeInfo, error) {
 	ocirt := define.OCIRuntimeInfo{

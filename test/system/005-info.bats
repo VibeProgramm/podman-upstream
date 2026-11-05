@@ -285,6 +285,43 @@ EOF
     CONTAINERS_STORAGE_CONF=$PODMAN_TMPDIR/storage.conf run_podman $safe_opts info --format {{.Store.GraphDriverName}}
 }
 
+@test "podman - changing cached storage paths with no objects overwrites them" {
+    # When the database holds no containers, pods, or volumes, changing a
+    # cached storage path must not fail with a "database configuration
+    # mismatch" error. Instead the stored paths are overwritten with the
+    # current runtime values.
+    skip_if_remote "Test relies on local libpod database path validation"
+
+    safe_opts=$(podman_isolation_opts ${PODMAN_TMPDIR})
+
+    # First run initializes the database and caches the default volume path.
+    run_podman $safe_opts info
+
+    # Second run changes the volume path. With no objects present this must
+    # succeed by overwriting the cached path rather than erroring.
+    run_podman $safe_opts --volumepath ${PODMAN_TMPDIR}/alt-volumes info
+}
+
+@test "podman - changing cached storage paths while objects exist still errors" {
+    # Once the database holds an object (here, a volume), changing a cached
+    # storage path must continue to fail, because the object may reference
+    # the previously cached path.
+    skip_if_remote "Test relies on local libpod database path validation"
+
+    safe_opts=$(podman_isolation_opts ${PODMAN_TMPDIR})
+
+    # Create a volume so the database now holds an object referencing the
+    # cached volume path.
+    run_podman $safe_opts volume create myvol
+
+    # Changing the volume path now must fail.
+    run_podman 125 $safe_opts --volumepath ${PODMAN_TMPDIR}/alt-volumes volume ls
+    assert "$output" =~ "database configuration mismatch" \
+           "changing volume path with an existing volume fails with a mismatch error"
+
+    run_podman $safe_opts volume rm myvol
+}
+
 @test "podman info - report why the default OCI runtime failed to initialize" {
     skip_if_remote "--tmpdir not supported via remote"
 

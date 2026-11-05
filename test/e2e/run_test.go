@@ -3,6 +3,7 @@
 package integration
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -19,6 +20,7 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	. "github.com/onsi/gomega/gexec"
+	"github.com/opencontainers/runtime-spec/specs-go"
 	"go.podman.io/common/pkg/cgroups"
 	"go.podman.io/common/pkg/config"
 	"go.podman.io/podman/v6/libpod/define"
@@ -528,6 +530,44 @@ var _ = Describe("Podman run", func() {
 		exec2.WaitWithDefaultTimeout()
 		Expect(exec2).Should(ExitCleanly())
 		Expect(exec2.OutputToString()).Should(Not(BeEmpty()), "ls powercap with --privileged")
+	})
+
+	It("podman create security-opt unmask powercap", func() {
+		const powercap = "/sys/devices/virtual/powercap"
+		Expect(config.DefaultMaskedPaths()).To(ContainElement(powercap))
+
+		maskedPathsAfterInit := func(securityOpt string) []string {
+			GinkgoHelper()
+
+			containerName := "unmask-powercap-" + stringid.GenerateRandomID()
+			args := []string{"create", "--name", containerName}
+			if securityOpt != "" {
+				args = append(args, "--security-opt", securityOpt)
+			}
+			args = append(args, ALPINE, "true")
+			podmanTest.PodmanExitCleanly(args...)
+			defer podmanTest.PodmanExitCleanly("rm", "-f", containerName)
+
+			podmanTest.PodmanExitCleanly("init", containerName)
+
+			inspectData := podmanTest.InspectContainer(containerName)
+			Expect(inspectData).To(HaveLen(1))
+			Expect(inspectData[0].OCIConfigPath).ToNot(BeEmpty())
+
+			ociBytes, err := os.ReadFile(inspectData[0].OCIConfigPath)
+			Expect(err).ToNot(HaveOccurred())
+			var oci specs.Spec
+			Expect(json.Unmarshal(ociBytes, &oci)).To(Succeed())
+			Expect(oci.Linux).ToNot(BeNil())
+			return oci.Linux.MaskedPaths
+		}
+
+		defaultMasks := maskedPathsAfterInit("")
+		Expect(defaultMasks).To(ContainElements(powercap))
+		Expect(defaultMasks).NotTo(ContainElements(powercap, powercap), "powercap must appear once in default maskedPaths after init")
+
+		unmasked := maskedPathsAfterInit("unmask=" + powercap)
+		Expect(unmasked).ToNot(ContainElement(powercap), "unmask must remove powercap from maskedPaths after init")
 	})
 
 	It("podman run security-opt unmask on /sys/fs/cgroup", func() {

@@ -164,6 +164,10 @@ type OCIRuntime interface { //nolint:interfacebloat
 	// RuntimeInfo returns verbose information about the runtime.
 	RuntimeInfo() (*define.ConmonInfo, *define.OCIRuntimeInfo, error)
 
+	// RuntimeVersionInfo returns conmon and OCI version metadata for compat
+	// GET /version without distro package lookups or OCI features probes.
+	RuntimeVersionInfo() (*define.ConmonInfo, *define.OCIRuntimeInfo, error)
+
 	// RuntimeFeatures returns the raw output of the runtime's "features"
 	// command. It returns an empty string if not supported.
 	RuntimeFeatures() string

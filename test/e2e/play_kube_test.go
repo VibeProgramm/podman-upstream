@@ -5070,6 +5070,24 @@ invalid kube kind
 		Expect(checkls.OutputToStringArray()).To(BeEmpty())
 	})
 
+	It("teardown prints a secret removal error", func() {
+		err := writeYaml(secretYaml, kubeYaml)
+		Expect(err).ToNot(HaveOccurred())
+
+		podmanTest.PodmanExitCleanly("kube", "play", kubeYaml)
+		// Root ignores a mode bit, so replace the data file with a directory.
+		// The file driver then fails the real kube down delete for every user.
+		dataFile := filepath.Join(podmanTest.Root, "secrets", "filedriver", "secretsdata.json")
+		Expect(os.Remove(dataFile)).To(Succeed())
+		Expect(os.Mkdir(dataFile, 0o700)).To(Succeed())
+
+		down := podmanTest.Podman([]string{"kube", "down", kubeYaml})
+		down.WaitWithDefaultTimeout()
+		Expect(down).Should(Exit(0))
+		Expect(down.ErrorToString()).To(ContainSubstring("deleting secret newsecret"))
+		Expect(down.ErrorToString()).To(ContainSubstring("is a directory"))
+	})
+
 	It("teardown pod does not exist", func() {
 		err := writeYaml(simplePodYaml, kubeYaml)
 		Expect(err).ToNot(HaveOccurred())
@@ -7024,5 +7042,75 @@ RUN echo "nested-build-marker" > /nested-marker`), 0o644)).To(Succeed())
 		session := podmanTest.Podman([]string{"kube", "play", "--multiple-pods", "--publish", fmt.Sprintf("%d:%d", GetPort(), 80), kubeYaml})
 		session.WaitWithDefaultTimeout()
 		Expect(session).To(ExitWithError(125, `number of Pod replicas aren't equal to the number of published ports: 2 replicas, 1 published ports`))
+	})
+
+	It("selects image platform", func() {
+		// --platform selects the requested platform.
+		pod := getPod(withCtr(getCtr(withImage(ALPINELISTTAG))))
+		err := generateKubeYaml("pod", pod, kubeYaml)
+		Expect(err).ToNot(HaveOccurred())
+
+		cmd := podmanTest.Podman([]string{"kube", "play", "--start=false", "--platform=linux/arm64", kubeYaml})
+		cmd.WaitWithDefaultTimeout()
+		Expect(cmd).Should(Exit(0), cmd.ErrorToString())
+
+		inspect := podmanTest.PodmanExitCleanly("inspect", ALPINELISTTAG)
+		image := inspect.InspectImageJSON()
+
+		Expect(image).To(HaveLen(1))
+		Expect(image[0].Os).To(Equal("linux"))
+		Expect(image[0].Architecture).To(Equal("arm64"))
+
+		podmanTest.PodmanExitCleanly("kube", "down", kubeYaml)
+
+		// Reuse the local image if it matches the requested platform.
+		cmd2 := podmanTest.Podman([]string{"kube", "play", "--start=false", "--platform=linux/arm64", kubeYaml})
+		cmd2.WaitWithDefaultTimeout()
+		Expect(cmd2).Should(Exit(0), cmd2.ErrorToString())
+
+		inspect2 := podmanTest.PodmanExitCleanly("inspect", ALPINELISTTAG)
+		image2 := inspect2.InspectImageJSON()
+
+		Expect(image2).To(HaveLen(1))
+		Expect(image2[0].ID).To(Equal(image[0].ID))
+		Expect(image2[0].Os).To(Equal("linux"))
+		Expect(image2[0].Architecture).To(Equal("arm64"))
+
+		podmanTest.PodmanExitCleanly("kube", "down", kubeYaml)
+
+		// Pull the requested image if the local image does not match the requested platform.
+		cmd3 := podmanTest.Podman([]string{"kube", "play", "--start=false", "--platform=linux/amd64", kubeYaml})
+		cmd3.WaitWithDefaultTimeout()
+		Expect(cmd3).Should(Exit(0), cmd3.ErrorToString())
+
+		inspect3 := podmanTest.PodmanExitCleanly("inspect", ALPINELISTTAG)
+		image3 := inspect3.InspectImageJSON()
+
+		Expect(image3).To(HaveLen(1))
+		Expect(image3[0].ID).ToNot(Equal(image[0].ID))
+		Expect(image3[0].Os).To(Equal("linux"))
+		Expect(image3[0].Architecture).To(Equal("amd64"))
+
+		podmanTest.PodmanExitCleanly("kube", "down", kubeYaml)
+
+		// --build builds the image for the requested platform.
+		if !IsRemote() {
+			buildDir := filepath.Join(podmanTest.TempDir, "alpine")
+			Expect(os.MkdirAll(buildDir, 0o755)).To(Succeed())
+
+			containerfile := filepath.Join(buildDir, "Containerfile")
+			Expect(os.WriteFile(containerfile, []byte("FROM quay.io/libpod/alpine:3.10.2\n"), 0o644)).To(Succeed())
+
+			cmd4 := podmanTest.Podman([]string{"kube", "play", "--build", "--start=false", "--platform=linux/arm/v7", kubeYaml})
+			cmd4.WaitWithDefaultTimeout()
+			Expect(cmd4).Should(Exit(0), cmd4.ErrorToString())
+
+			inspect4 := podmanTest.PodmanExitCleanly("inspect", ALPINELISTTAG)
+			image4 := inspect4.InspectImageJSON()
+
+			Expect(image4).To(HaveLen(1))
+			Expect(image4[0].Os).To(Equal("linux"))
+			Expect(image4[0].Architecture).To(Equal("arm"))
+		}
 	})
 })

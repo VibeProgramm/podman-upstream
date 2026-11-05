@@ -254,6 +254,21 @@ LISTEN_FDNAMES=listen_fdnames" | sort)
     check_listen_env "$stdenv" "podman start"
 }
 
+@test "podman does not pass LISTEN environment to conmon" {
+    skip_if_remote "conmon environment is not set by the remote client"
+
+    set_listen_env
+    run_podman run -d --hostname=host1 $IMAGE sleep infinity
+    unset_listen_env
+    cid="$output"
+
+    run_podman container inspect $cid --format "{{ .State.ConmonPid }}"
+    conmon_listen_env="$(tr '\0' '\n' < /proc/$output/environ | grep '^LISTEN_' || true)"
+    assert "$conmon_listen_env" == "" "LISTEN_* is not passed to conmon"
+
+    run_podman rm -f -t0 $cid
+}
+
 @test "podman generate - systemd template" {
     cname=c-$(safename)
     run_podman create --name $cname $IMAGE top

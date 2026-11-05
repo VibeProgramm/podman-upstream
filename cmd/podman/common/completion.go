@@ -1170,9 +1170,9 @@ func AutocompleteLogDriver(_ *cobra.Command, _ []string, _ string) ([]string, co
 }
 
 // AutocompleteLogOpt - Autocomplete log-opt options.
-// -> "path=", "tag="
+// -> "path=", "tag=", "max-size=", "max-file=", "log-rotate=", "label="
 func AutocompleteLogOpt(_ *cobra.Command, _ []string, toComplete string) ([]string, cobra.ShellCompDirective) {
-	logOptions := []string{"path=", "tag=", "max-size=", "label="}
+	logOptions := []string{"path=", "tag=", "max-size=", "max-file=", "log-rotate=", "label="}
 	if strings.HasPrefix(toComplete, "path=") {
 		return nil, cobra.ShellCompDirectiveDefault
 	}
@@ -1716,7 +1716,8 @@ func AutocompleteImageScpCompressionFormat(_ *cobra.Command, _ []string, _ strin
 func AutocompleteWaitCondition(_ *cobra.Command, _ []string, _ string) ([]string, cobra.ShellCompDirective) {
 	states := []string{
 		"unknown", "configured", "created", "exited",
-		"healthy", "initialized", "paused", "removing", "running",
+		"healthy", "initialized", "next-exit", "not-running",
+		"paused", "removed", "removing", "running",
 		"stopped", "stopping", "unhealthy",
 	}
 	return states, cobra.ShellCompDirectiveNoFileComp

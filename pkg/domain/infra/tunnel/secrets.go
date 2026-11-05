@@ -52,8 +52,7 @@ func (ic *ContainerEngine) SecretInspect(_ context.Context, nameOrIDs []string, 
 
 func (ic *ContainerEngine) SecretList(_ context.Context, opts entities.SecretListRequest) ([]*entities.SecretInfoReport, error) {
 	options := new(secrets.ListOptions).WithFilters(opts.Filters)
-	secrs, _ := secrets.List(ic.ClientCtx, options)
-	return secrs, nil
+	return secrets.List(ic.ClientCtx, options)
 }
 
 func (ic *ContainerEngine) SecretRm(_ context.Context, nameOrIDs []string, options entities.SecretRmOptions) ([]*entities.SecretRmReport, error) {

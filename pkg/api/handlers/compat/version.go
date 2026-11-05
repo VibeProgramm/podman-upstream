@@ -8,6 +8,7 @@ import (
 	goRuntime "runtime"
 	"time"
 
+	"go.podman.io/buildah/pkg/util"
 	"go.podman.io/podman/v6/libpod"
 	"go.podman.io/podman/v6/libpod/define"
 	"go.podman.io/podman/v6/pkg/api/handlers/utils"
@@ -26,10 +27,28 @@ func VersionHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	info, err := runtime.Info()
+	kernel, err := util.ReadKernelVersion()
 	if err != nil {
-		utils.Error(w, http.StatusInternalServerError, fmt.Errorf("failed to obtain system memory info: %w", err))
+		utils.Error(w, http.StatusInternalServerError, fmt.Errorf("reading kernel version: %w", err))
 		return
+	}
+	dist := runtime.GetHostDistributionInfo()
+
+	conmonInfo, ociInfo, err := runtime.DefaultOCIRuntime().RuntimeVersionInfo()
+	if err != nil {
+		utils.Error(w, http.StatusInternalServerError, fmt.Errorf("getting OCI runtime version info: %w", err))
+		return
+	}
+
+	conmonVersion := ""
+	if conmonInfo != nil {
+		conmonVersion = conmonInfo.Version
+	}
+	ociName := "OCI Runtime"
+	ociVersion := ""
+	if ociInfo != nil {
+		ociName = fmt.Sprintf("OCI Runtime (%s)", ociInfo.Name)
+		ociVersion = ociInfo.Version
 	}
 
 	components := []types.ComponentVersion{{
@@ -42,22 +61,16 @@ func VersionHandler(w http.ResponseWriter, r *http.Request) {
 			"Experimental":  "false",
 			"GitCommit":     running.GitCommit,
 			"GoVersion":     running.GoVersion,
-			"KernelVersion": info.Host.Kernel,
+			"KernelVersion": kernel,
 			"MinAPIVersion": version.APIVersion[version.Libpod][version.MinimalAPI].String(),
 			"Os":            goRuntime.GOOS,
 		},
 	}, {
 		Name:    "Conmon",
-		Version: info.Host.Conmon.Version,
-		Details: map[string]string{
-			"Package": info.Host.Conmon.Package,
-		},
+		Version: conmonVersion,
 	}, {
-		Name:    fmt.Sprintf("OCI Runtime (%s)", info.Host.OCIRuntime.Name),
-		Version: info.Host.OCIRuntime.Version,
-		Details: map[string]string{
-			"Package": info.Host.OCIRuntime.Package,
-		},
+		Name:    ociName,
+		Version: ociVersion,
 	}}
 
 	apiVersion := version.APIVersion[version.Compat][version.CurrentAPI]
@@ -68,7 +81,7 @@ func VersionHandler(w http.ResponseWriter, r *http.Request) {
 			Platform: struct {
 				Name string
 			}{
-				Name: fmt.Sprintf("%s/%s/%s-%s", goRuntime.GOOS, goRuntime.GOARCH, info.Host.Distribution.Distribution, info.Host.Distribution.Version),
+				Name: fmt.Sprintf("%s/%s/%s-%s", goRuntime.GOOS, goRuntime.GOARCH, dist.Distribution, dist.Version),
 			},
 			APIVersion:    fmt.Sprintf("%d.%d", apiVersion.Major, apiVersion.Minor),
 			Arch:          components[0].Details["Arch"],

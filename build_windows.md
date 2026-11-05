@@ -19,9 +19,14 @@ Windows.
 - [Build and test the Podman client for Windows](#build-and-test-the-podman-client-for-windows)
   - [Build the Podman client](#build-the-podman-client)
   - [Download gvproxy.exe and win-sshproxy.exe](#download-gvproxyexe-and-win-sshproxyexe)
+  - [Add the Podman client to the PATH](#add-the-podman-client-to-the-path)
   - [Create a configuration file (optional)](#create-a-configuration-file-optional)
   - [Create and start a podman machine](#create-and-start-a-podman-machine)
   - [Run a container using podman](#run-a-container-using-podman)
+- [Build and test the Podman server](#build-and-test-the-podman-server)
+  - [Set up a Fedora WSL distribution](#set-up-a-fedora-wsl-distribution)
+  - [Build and test Podman in the WSL distribution](#build-and-test-podman-in-the-wsl-distribution)
+  - [Replace the Podman binary in the Podman machine](#replace-the-podman-binary-in-the-podman-machine)
 - [Build and test the Podman Windows installer](#build-and-test-the-podman-windows-installer)
   - [Build the Windows installer](#build-the-windows-installer)
   - [Test the Windows installer](#test-the-windows-installer)
@@ -92,7 +97,7 @@ dotnet tool install --global wix --version 5.0.2
 
 :information_source: Because WiX Toolset has changed its licensing model when v6
 was released, [Podman still uses the WiX Toolset
-v5.0.2](https://github.com/containers/podman/issues/27042)
+v5.0.2](https://github.com/podman-container-tools/podman/issues/27042)
 and we recommend using it as well for local development (although it's not
 strictly required).
 
@@ -107,9 +112,9 @@ At least one of those two is required to test podman on a local Windows machine.
 
 #### WSL
 
-WSL can be installed on Windows 10 and Windows 11, including Windows Home, with
-the following command, from a PowerShell or Windows Command Prompt terminal in
-**administrator mode**:
+WSL can be installed on Windows 10 and Windows 11, including Windows Home.
+Enter the `wsl --install` command, from a PowerShell or Windows Command Prompt
+terminal in **administrator mode**, then restart your machine:
 
 ```pwsh
 wsl --install
@@ -150,7 +155,7 @@ CRLF.
 Then run the command to clone the Podman git repository:
 
 ```pwsh
-git clone https://github.com/containers/podman
+git clone https://github.com/podman-container-tools/podman
 ```
 
 It creates the folder `podman` in the current directory and clones the Podman
@@ -160,7 +165,7 @@ git repository into it.
 
 A developer can build the Podman client for Windows and the Windows installer
 with the PowerShell script
-[winmake.ps1](https://github.com/containers/podman/blob/main/winmake.ps1).
+[winmake.ps1](https://github.com/podman-container-tools/podman/blob/main/winmake.ps1).
 
 Windows sets the ExecutionPolicy to `Restricted` by default; running scripts is
 prohibited. Determine the ExecutionPolicy on the machine with this command:
@@ -243,6 +248,21 @@ Mode                 LastWriteTime         Length Name
 -a----         2/29/2024  12:10 PM        4089856 win-sshproxy.exe
 ```
 
+### Add the Podman client to the PATH
+
+To run the locally built client with `podman` instead of
+`.\bin\windows\podman.exe`, add the `bin\windows` folder to the `PATH` of the
+current terminal. From the root of the repository:
+
+```pwsh
+$env:Path = "$PWD\bin\windows;$env:Path"
+```
+
+:information_source: The folder is put first so that the locally built client
+takes precedence over any other Podman installed on the system. The change only
+applies to the current terminal. The commands in the rest of this document
+assume it has been done.
+
 ### Create a configuration file (optional)
 
 To test some particular configurations of Podman, create a `containers.conf`
@@ -263,20 +283,20 @@ provider="hyperv"
 ```
 
 Find the complete list of configuration options in the
-[documentation](https://github.com/containers/container-libs/blob/main/common/docs/containers.conf.5.md).
+[documentation](https://github.com/podman-container-tools/container-libs/blob/main/common/docs/containers.conf.5.md).
 
 ### Create and start a podman machine
 
 Execute the following commands in a terminal to create a Podman machine:
 
 ```pwsh
-.\bin\windows\podman.exe machine init
+podman machine init
 ```
 
 When `machine init` completes, run `machine start`:
 
 ```pwsh
-.\bin\windows\podman.exe machine start
+podman machine start
 ```
 
 :information_source: If the virtualization provider is Hyperv-V, execute the
@@ -287,11 +307,135 @@ above commands in an administrator terminal.
 Use the locally built Podman client for Windows to run containers:
 
 ```pwsh
-.\bin\windows\podman.exe run hello-world
+podman run hello-world
 ```
 
 To learn how to use the Podman client, refer to its
-[tutorial](https://github.com/containers/podman/blob/main/docs/tutorials/remote_client.md).
+[tutorial](https://github.com/podman-container-tools/podman/blob/main/docs/tutorials/remote_client.md).
+
+## Build and test the Podman server
+
+On Windows, `podman.exe` is only a client. The Podman server (the Linux
+`podman` binary running `podman system service`) runs inside the Podman machine.
+The server code (`libpod`, `pkg/api`, ...) only builds on Linux, so changes to it
+are built and tested in a Linux environment. This section describes how to use a
+Fedora WSL distribution for that, and how to run the resulting binary in the
+Podman machine to test it together with the Windows client.
+
+### Set up a Fedora WSL distribution
+
+The distribution must run the same Fedora release as the Podman machine, since
+the `podman` binary built in it is dynamically linked against the system
+libraries. Retrieve the release used by the machine:
+
+```pwsh
+podman machine ssh "grep PRETTY_NAME /etc/os-release"
+```
+
+List the distributions available online and install the matching Fedora release
+(e.g. `FedoraLinux-44` for Fedora 44):
+
+```pwsh
+wsl --list --online
+wsl --install FedoraLinux-44 --name podman-dev
+```
+
+:information_source: Once installed, a terminal in the new distribution opens
+automatically. To open one later, run `wsl -d podman-dev`. The distribution name
+(`podman-dev`) is the one to pass to `wsl -d` in the commands below.
+
+In the distribution terminal, update the distribution and install git:
+
+```sh
+sudo dnf -y update
+sudo dnf -y install git
+```
+
+Clone the Podman repository **inside** the WSL file system (for example in
+`~/git/podman`), not under `/mnt/c`. Building on the Windows file system is much
+slower and breaks file permissions. Some files of the repository are needed to
+configure the distribution, so do this first:
+
+```sh
+mkdir -p ~/git && cd ~/git
+git clone https://github.com/podman-container-tools/podman
+cd podman
+```
+
+Then configure the distribution for Podman development following the Podman
+documentation (typically `sudo dnf -y builddep rpm/podman.spec` is enough to
+configure the distribution for building and test Podman):
+
+- [Building from source](https://podman.io/docs/installation#building-from-source):
+  lists the build dependencies to install on Fedora, and the required Go version.
+- [CONTRIBUTING.md](CONTRIBUTING.md): development workflow and requirements for
+  pull requests.
+- [test/README.md](test/README.md): additional tools needed to run the
+  integration and system tests (e.g. `bats`, `ginkgo`).
+
+### Build and test Podman in the WSL distribution
+
+Build and test following the Podman documentation, from the shell opened in the
+distribution:
+
+- [Building from source](https://podman.io/docs/installation#building-from-source):
+  `make binaries` builds everything, `make podman` only the `podman` binary
+  (written to `bin/podman`).
+- [test/README.md](test/README.md): how to run unit, integration
+  (`make localintegration`) and system (`make localsystem`) tests.
+
+Commands can also be run from PowerShell without opening an interactive shell:
+
+```pwsh
+wsl -d podman-dev --cd '~/git/podman' -- make podman
+```
+
+### Replace the Podman binary in the Podman machine
+
+To test the server changes with the Windows client, replace the `podman` binary
+used by the service in the Podman machine with the one just built. The steps
+below assume a running machine named `podman-machine-default` and the client
+built and added to the `PATH` (see above).
+
+1. From the root of the Windows checkout, copy the binary built in WSL to
+   `.\bin\podman-linux`:
+
+   ```pwsh
+   wsl -d podman-dev --cd "$PWD" -- cp '~/git/podman/bin/podman' './bin/podman-linux'
+   ```
+
+2. Stop the Podman service running in the machine. The first time (or after the
+   machine is rebooted), stop the systemd unit so that it doesn't restart the
+   service; then kill any remaining `podman` process:
+
+   ```pwsh
+   podman machine ssh sudo systemctl stop podman.service
+   ```
+
+3. Copy the new binary into the machine and make it executable:
+
+   ```pwsh
+   podman machine cp .\bin\podman-linux podman-machine-default:/tmp/podman
+   podman machine ssh sudo chmod +x /tmp/podman
+   ```
+
+4. Start the service with the new binary:
+
+   ```pwsh
+   podman machine ssh 'nohup /tmp/podman system service --time=0 > /tmp/podman-service.log 2>&1 &'
+   ```
+
+5. Verify that the machine is using the new server, then use the client as usual:
+
+   ```pwsh
+   podman version
+   podman run hello-world
+   ```
+
+:information_source: `/tmp` is cleared when the machine restarts, and the
+systemd-managed service is replaced by the manually started one only until then.
+After a restart, `machine start` brings back the original binary; repeat the
+steps above to test again.
 
 ## Build and test the Podman Windows installer
 
